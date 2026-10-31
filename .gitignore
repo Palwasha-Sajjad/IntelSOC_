@@ -1,0 +1,26 @@
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Python virtual environment
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local development files
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Model checkpoints and large generated files
+models/checkpoints/
+*.pt
+*.pth

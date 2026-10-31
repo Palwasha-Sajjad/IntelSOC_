@@ -1,0 +1,5 @@
+# Known-compatible versions for the first IntelSOC backend milestone.
+fastapi==0.128.2
+uvicorn==0.48.0
+pytest==9.0.2
+httpx==0.28.1

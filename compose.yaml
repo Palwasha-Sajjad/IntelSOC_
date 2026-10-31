@@ -1,0 +1,54 @@
+
+name: intelsoc
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: intelsoc
+      POSTGRES_DB: intelsoc
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set password in .env}
+
+    ports:
+      - "127.0.0.1:5433:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    mem_limit: 512m
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U intelsoc -d intelsoc"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 96mb
+      - --maxmemory-policy
+      - noeviction
+
+    ports:
+      - "127.0.0.1:6380:6379"
+
+    volumes:
+      - redis_data:/data
+
+    mem_limit: 192m
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:
