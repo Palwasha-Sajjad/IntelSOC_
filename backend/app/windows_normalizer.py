@@ -11,7 +11,6 @@ def normalize_windows_event(record: dict) -> dict:
         "EventRecordID",
         "EventID",
         "TimeCreated",
-        "Message",
         "ProviderName",
     )
 
@@ -24,6 +23,11 @@ def normalize_windows_event(record: dict) -> dict:
         record["TimeCreated"],
         "%Y-%m-%d %H:%M:%S %z",
     )
+
+    message = str(record.get("Message") or "").strip()
+
+    if not message:
+        message = "[No event message available]"
 
     # Same Windows record always produces the same UUID.
     identity = (
@@ -44,6 +48,6 @@ def normalize_windows_event(record: dict) -> dict:
         "message": (
             f"EventID={record['EventID']} "
             f"Provider={record['ProviderName']}: "
-            f"{record['Message']}"
+            f"{message}"
         ),
     }

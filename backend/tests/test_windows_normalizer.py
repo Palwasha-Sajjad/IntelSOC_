@@ -43,3 +43,23 @@ def test_missing_required_field():
 
     with pytest.raises(ValueError, match="TimeCreated"):
         normalize_windows_event(record)
+
+
+def test_windows_event_with_missing_message():
+    record = sample_record()
+
+    # Simulate a genuine Windows event without a message.
+    del record["Message"]
+
+    result = normalize_windows_event(record)
+    event = SecurityEvent.model_validate(result)
+
+    assert event.source == "windows_eventlog"
+    assert "EventID=777" in event.message
+    assert "[No event message available]" in event.message
+
+    # Also verify that a null message does not crash.
+    record["Message"] = None
+    result = normalize_windows_event(record)
+
+    assert "[No event message available]" in result["message"]

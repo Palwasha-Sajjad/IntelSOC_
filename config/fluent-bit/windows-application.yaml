@@ -15,7 +15,7 @@ pipeline:
   filters:
     - name: grep
       match: intelsoc.windows
-      regex: 'ProviderName ^IntelSOC-Test$'
+      regex: 'ProviderName ^(IntelSOC-Test|Microsoft-Windows-Security-SPP)$'
 
   outputs:
     - name: http
