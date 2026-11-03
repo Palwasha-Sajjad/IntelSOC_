@@ -4,6 +4,9 @@ from fastapi import APIRouter, HTTPException
 
 from app.schemas.event import SecurityEvent
 
+from typing import Any
+
+from app.windows_normalizer import normalize_windows_event
 
 router = APIRouter(tags=["events"])
 
@@ -40,3 +43,41 @@ def receive_event(event: SecurityEvent):
 
     finally:
         client.close()
+
+
+@router.post("/events/windows", status_code=202)
+def receive_windows_events(records: list[dict[str, Any]]):
+    """Receive raw Windows events from Fluent Bit."""
+
+    if not records:
+        raise HTTPException(
+            status_code=422,
+            detail="Windows event batch cannot be empty",
+        )
+
+    # Validate the entire batch before queueing anything.
+    try:
+        normalized_events = [
+            SecurityEvent.model_validate(
+                normalize_windows_event(record)
+            )
+            for record in records
+        ]
+    except (ValueError, TypeError) as error:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid Windows event: {error}",
+        ) from error
+
+    # Reuse our existing Redis ingestion function.
+    queued_events = [
+        receive_event(event)
+        for event in normalized_events
+    ]
+
+    return {
+        "status": "queued",
+        "accepted": len(queued_events),
+        "events": queued_events,
+    }
+
