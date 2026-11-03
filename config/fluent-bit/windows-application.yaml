@@ -1,0 +1,26 @@
+service:
+  flush: 1
+  daemon: off
+  log_level: info
+
+pipeline:
+  inputs:
+    - name: winevtlog
+      tag: intelsoc.windows
+      channels: Application
+      interval_sec: 1
+      read_existing_events: false
+      db: ${INTELSOC_FLUENTBIT_DB}
+
+  filters:
+    - name: grep
+      match: intelsoc.windows
+      regex: 'ProviderName ^IntelSOC-Test$'
+
+  outputs:
+    - name: http
+      match: intelsoc.windows
+      host: 127.0.0.1
+      port: 8000
+      uri: /api/v1/events/windows
+      format: json
