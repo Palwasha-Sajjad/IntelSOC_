@@ -86,3 +86,39 @@ def receive_windows_events(records: list[dict[str, Any]]):
         "events": queued_events,
     }
 
+
+@router.post("/events/linux", status_code=202)
+def receive_linux_events(records: list[dict[str, Any]]):
+    """Receive Linux SSH journal records from Fluent Bit."""
+
+    from app.linux_normalizer import normalize_linux_event
+
+    if not records:
+        raise HTTPException(
+            status_code=422,
+            detail="Linux event batch cannot be empty",
+        )
+
+    try:
+        normalized_events = [
+            SecurityEvent.model_validate(
+                normalize_linux_event(record)
+            )
+            for record in records
+        ]
+    except (ValueError, TypeError) as error:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid Linux event: {error}",
+        ) from error
+
+    queued_events = [
+        receive_event(event)
+        for event in normalized_events
+    ]
+
+    return {
+        "status": "queued",
+        "accepted": len(queued_events),
+        "events": queued_events,
+    }
