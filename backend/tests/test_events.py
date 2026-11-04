@@ -8,7 +8,10 @@ from app.main import app
 from app.api.routes import events
 
 
-client = TestClient(app)
+client = TestClient(
+    app,
+    headers={"X-IntelSOC-Key": "intelsoc-test-only-key"},
+)
 
 
 def sample_event():

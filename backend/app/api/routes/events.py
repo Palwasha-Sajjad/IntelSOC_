@@ -1,6 +1,6 @@
 import redis
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.schemas.event import SecurityEvent
 
@@ -8,7 +8,12 @@ from typing import Any
 
 from app.windows_normalizer import normalize_windows_event
 
-router = APIRouter(tags=["events"])
+from app.api.security import verify_ingest_key
+
+router = APIRouter(
+    tags=["events"],
+    dependencies=[Depends(verify_ingest_key)],
+)
 
 STREAM_NAME = "intelsoc:events"
 

@@ -17,6 +17,7 @@ pipeline:
       match: intelsoc.windows
       regex: 'ProviderName ^(IntelSOC-Test|Microsoft-Windows-Security-SPP)$'
 
+
   outputs:
     - name: http
       match: intelsoc.windows
@@ -24,3 +25,6 @@ pipeline:
       port: 8000
       uri: /api/v1/events/windows
       format: json
+      header:
+        - 'X-IntelSOC-Key ${INTELSOC_INGEST_API_KEY}'
+

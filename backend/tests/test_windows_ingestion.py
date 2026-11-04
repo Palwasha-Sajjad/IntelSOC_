@@ -7,7 +7,10 @@ from app.api.routes import events
 from app.main import app
 
 
-client = TestClient(app)
+client = TestClient(
+    app,
+    headers={"X-IntelSOC-Key": "intelsoc-test-only-key"},
+)
 
 
 class FakeRedis:
