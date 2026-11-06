@@ -1,15 +1,24 @@
 import json
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api.routes import events
+from app.api import security
 from app.main import app
 
 
+TEST_DEVICE_ID = uuid4()
+
 client = TestClient(
     app,
-    headers={"X-IntelSOC-Key": "intelsoc-test-only-key"},
+    headers={
+        "X-IntelSOC-Key": "intelsoc-test-only-key",
+        "X-Device-ID": str(TEST_DEVICE_ID),
+        "X-IntelSOC-Client-CN": "intelsoc-device-win-test",
+        "X-IntelSOC-Client-Fingerprint": "AA" * 32,
+    },
 )
 
 
@@ -24,6 +33,25 @@ class FakeRedis:
     def close(self):
         pass
 
+
+
+
+@pytest.fixture(autouse=True)
+def registered_test_device(monkeypatch):
+    device = {
+        "device_id": TEST_DEVICE_ID,
+        "hostname": "LAB-PC",
+        "platform": "windows",
+        "certificate_common_name": "intelsoc-device-win-test",
+        "certificate_fingerprint": "AA" * 32,
+        "status": "active",
+    }
+
+    monkeypatch.setattr(
+        security,
+        "get_device_by_id",
+        lambda value: device,
+    )
 
 @pytest.fixture
 def fake_queue(monkeypatch):

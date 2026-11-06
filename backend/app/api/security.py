@@ -4,7 +4,7 @@ import secrets
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import HTTPException, Security
+from fastapi import Header, HTTPException, Security
 from fastapi.security import APIKeyHeader
 
 from app.services.device_service import get_device_by_id, validate_device_identity
@@ -75,3 +75,34 @@ def verify_registered_device(
         )
 
     return device
+
+
+
+def verify_ingest_device(
+    submitted_device_id: str | None = Header(
+        default=None,
+        alias="X-Device-ID",
+    ),
+    certificate_common_name: str | None = Header(
+        default=None,
+        alias="X-IntelSOC-Client-CN",
+    ),
+    certificate_fingerprint: str | None = Header(
+        default=None,
+        alias="X-IntelSOC-Client-Fingerprint",
+    ),
+) -> dict:
+    """
+    Validate a registered endpoint identity.
+
+    X-Device-ID is supplied by the endpoint and must match the
+    registered device.
+
+    Certificate CN and fingerprint are trusted only when injected
+    by the mTLS reverse proxy after client-certificate validation.
+    """
+    return verify_registered_device(
+        submitted_device_id=submitted_device_id,
+        certificate_common_name=certificate_common_name,
+        certificate_fingerprint=certificate_fingerprint,
+    )

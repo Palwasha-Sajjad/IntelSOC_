@@ -8,7 +8,7 @@ from typing import Any
 
 from app.windows_normalizer import normalize_windows_event
 
-from app.api.security import verify_ingest_key
+from app.api.security import verify_ingest_device, verify_ingest_key
 
 router = APIRouter(
     tags=["events"],
@@ -51,7 +51,10 @@ def receive_event(event: SecurityEvent):
 
 
 @router.post("/events/windows", status_code=202)
-def receive_windows_events(records: list[dict[str, Any]]):
+def receive_windows_events(
+    records: list[dict[str, Any]],
+    device: dict = Depends(verify_ingest_device),
+):
     """Receive raw Windows events from Fluent Bit."""
 
     if not records:
@@ -84,7 +87,10 @@ def receive_windows_events(records: list[dict[str, Any]]):
     }
 
 @router.post("/events/linux", status_code=202)
-def receive_linux_events(records: list[dict[str, Any]]):
+def receive_linux_events(
+    records: list[dict[str, Any]],
+    device: dict = Depends(verify_ingest_device),
+):
     """Receive Linux SSH journal records from Fluent Bit."""
 
     from app.linux_normalizer import normalize_linux_event
