@@ -19,3 +19,5 @@ class SecurityEvent(BaseModel):
     src_ip: str | None = None
 
     message: str = Field(min_length=1, max_length=65536)
+
+    raw_event: dict = Field(default_factory=dict)

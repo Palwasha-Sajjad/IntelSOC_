@@ -63,3 +63,15 @@ def test_windows_event_with_missing_message():
     result = normalize_windows_event(record)
 
     assert "[No event message available]" in result["message"]
+
+
+def test_windows_raw_event_is_preserved():
+    record = sample_record()
+    record["ExtraEvidence"] = "must-survive-normalization"
+
+    result = normalize_windows_event(record)
+    event = SecurityEvent.model_validate(result)
+
+    assert event.raw_event == record
+    assert event.raw_event["EventRecordID"] == 28636
+    assert event.raw_event["ExtraEvidence"] == "must-survive-normalization"

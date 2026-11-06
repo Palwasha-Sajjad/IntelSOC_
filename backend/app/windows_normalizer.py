@@ -50,4 +50,5 @@ def normalize_windows_event(record: dict) -> dict:
             f"Provider={record['ProviderName']}: "
             f"{message}"
         ),
+        "raw_event": dict(record),
     }

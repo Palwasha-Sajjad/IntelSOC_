@@ -57,4 +57,5 @@ def normalize_linux_event(record: dict) -> dict:
         "event_type": "linux_ssh_event",
         "src_ip": None,
         "message": message[:2048],
+        "raw_event": dict(record),
     }

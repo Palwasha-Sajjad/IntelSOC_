@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -52,7 +53,7 @@ def save_event(payload):
                     event.event_type,
                     event.src_ip,
                     event.message,
-                    event.model_dump_json(),
+                    json.dumps(event.raw_event),
                 ),
             )
 

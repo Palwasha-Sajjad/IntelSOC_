@@ -119,3 +119,60 @@ def test_dlq_failure_not_silently_ignored(monkeypatch):
         )
 
     client.xack.assert_not_called()
+
+
+def test_save_event_persists_original_raw_event(monkeypatch):
+    import json
+
+    raw_event = {
+        "EventRecordID": 99999,
+        "EventID": 4625,
+        "Computer": "LAB-PC",
+        "Message": "Original forensic evidence",
+        "CustomEvidence": "preserve-this",
+    }
+
+    event = SecurityEvent(
+        timestamp="2026-11-06T12:00:00+00:00",
+        source="windows_eventlog",
+        hostname="LAB-PC",
+        event_type="windows_security_event",
+        message="Normalized event message",
+        raw_event=raw_event,
+    )
+
+    executed = {}
+
+    cursor = MagicMock()
+
+    def execute(sql, params):
+        executed["sql"] = sql
+        executed["params"] = params
+
+    cursor.execute.side_effect = execute
+
+    cursor_context = MagicMock()
+    cursor_context.__enter__.return_value = cursor
+    cursor_context.__exit__.return_value = False
+
+    connection = MagicMock()
+    connection.cursor.return_value = cursor_context
+
+    connection_context = MagicMock()
+    connection_context.__enter__.return_value = connection
+    connection_context.__exit__.return_value = False
+
+    monkeypatch.setattr(
+        worker.psycopg,
+        "connect",
+        lambda **kwargs: connection_context,
+    )
+
+    monkeypatch.setenv("POSTGRES_PASSWORD", "test-only-password")
+
+    worker.save_event(event.model_dump_json())
+
+    stored_raw_event = json.loads(executed["params"][8])
+
+    assert stored_raw_event == raw_event
+    assert stored_raw_event["CustomEvidence"] == "preserve-this"
