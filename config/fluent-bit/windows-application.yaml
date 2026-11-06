@@ -2,29 +2,43 @@ service:
   flush: 1
   daemon: off
   log_level: info
+  storage.path: ${INTELSOC_FLUENTBIT_STORAGE}
+  storage.sync: full
+  storage.checksum: on
 
 pipeline:
   inputs:
+    # Existing Application collector
     - name: winevtlog
-      tag: intelsoc.windows
+      tag: intelsoc.windows.application
       channels: Application
       interval_sec: 1
       read_existing_events: false
       db: ${INTELSOC_FLUENTBIT_DB}
+      storage.type: filesystem
+
+    # New Security collector
+    - name: winevtlog
+      tag: intelsoc.windows.security
+      channels: Security
+      interval_sec: 1
+      read_existing_events: false
+      event_query: '*[System[(EventID=4624 or EventID=4625 or EventID=4740)]]'
+      db: ${INTELSOC_FLUENTBIT_SECURITY_DB}
+      storage.type: filesystem
 
   filters:
     - name: grep
-      match: intelsoc.windows
+      match: intelsoc.windows.application
       regex: 'ProviderName ^(IntelSOC-Test|Microsoft-Windows-Security-SPP)$'
-
 
   outputs:
     - name: http
-      match: intelsoc.windows
+      match: 'intelsoc.windows.*'
       host: 127.0.0.1
       port: 8000
       uri: /api/v1/events/windows
       format: json
       header:
         - 'X-IntelSOC-Key ${INTELSOC_INGEST_API_KEY}'
-
+      retry_limit: false

@@ -18,4 +18,4 @@ class SecurityEvent(BaseModel):
 
     src_ip: str | None = None
 
-    message: str = Field(min_length=1, max_length=2048)
+    message: str = Field(min_length=1, max_length=65536)

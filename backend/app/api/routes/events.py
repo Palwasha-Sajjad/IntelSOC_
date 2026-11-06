@@ -75,17 +75,13 @@ def receive_windows_events(records: list[dict[str, Any]]):
         ) from error
 
     # Reuse our existing Redis ingestion function.
-    queued_events = [
+    for event in normalized_events:
         receive_event(event)
-        for event in normalized_events
-    ]
 
     return {
         "status": "queued",
-        "accepted": len(queued_events),
-        "events": queued_events,
+        "accepted": len(normalized_events),
     }
-
 
 @router.post("/events/linux", status_code=202)
 def receive_linux_events(records: list[dict[str, Any]]):
@@ -112,13 +108,10 @@ def receive_linux_events(records: list[dict[str, Any]]):
             detail=f"Invalid Linux event: {error}",
         ) from error
 
-    queued_events = [
+    for event in normalized_events:
         receive_event(event)
-        for event in normalized_events
-    ]
 
     return {
         "status": "queued",
-        "accepted": len(queued_events),
-        "events": queued_events,
+        "accepted": len(normalized_events),
     }

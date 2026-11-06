@@ -106,3 +106,49 @@ def test_repeated_event_has_same_id(fake_queue):
     )
 
     assert first_payload["event_id"] == second_payload["event_id"]
+
+def test_large_windows_batch_has_compact_response(fake_queue):
+    records = []
+
+    for i in range(100):
+        record = sample_record()
+        record["EventRecordID"] = 30000 + i
+        records.append(record)
+
+    response = client.post(
+        "/api/v1/events/windows",
+        json=records,
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "status": "queued",
+        "accepted": 100,
+    }
+
+    assert len(response.content) < 512
+    assert len(fake_queue.entries) == 100
+
+def test_large_windows_security_event_is_queued(fake_queue):
+    record = sample_record()
+
+    record["Channel"] = "Security"
+    record["EventID"] = 4624
+    record["EventRecordID"] = 462401
+    record["ProviderName"] = "Microsoft-Windows-Security-Auditing"
+    record["Message"] = "Detailed Windows authentication event. " * 250
+
+    response = client.post(
+        "/api/v1/events/windows",
+        json=[record],
+    )
+
+    assert response.status_code == 202
+    assert response.json()["accepted"] == 1
+    assert len(fake_queue.entries) == 1
+
+    payload = json.loads(fake_queue.entries[0][1]["payload"])
+
+    assert payload["event_type"] == "windows_security_event"
+    assert payload["message"].endswith(record["Message"].strip())
+    assert len(payload["message"]) > 2048
