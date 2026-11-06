@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 from fastapi import HTTPException, Security
 from fastapi.security import APIKeyHeader
 
+from app.services.device_service import get_device_by_id, validate_device_identity
+
 
 # Load IntelSOC's existing root .env file.
 ROOT_DIR = Path(__file__).resolve().parents[3]
@@ -37,3 +39,39 @@ def verify_ingest_key(
             status_code=401,
             detail="Invalid or missing ingestion API key",
         )
+
+def verify_registered_device(
+    submitted_device_id: str | None,
+    certificate_common_name: str | None,
+    certificate_fingerprint: str | None,
+) -> dict:
+    if (
+        not submitted_device_id
+        or not certificate_common_name
+        or not certificate_fingerprint
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Missing device identity",
+        )
+
+    device = get_device_by_id(submitted_device_id)
+
+    if device is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Unknown device",
+        )
+
+    if not validate_device_identity(
+        device=device,
+        submitted_device_id=submitted_device_id,
+        certificate_common_name=certificate_common_name,
+        certificate_fingerprint=certificate_fingerprint,
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Device identity mismatch",
+        )
+
+    return device
