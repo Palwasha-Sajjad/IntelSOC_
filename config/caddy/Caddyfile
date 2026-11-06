@@ -1,0 +1,40 @@
+{
+	auto_https disable_redirects
+}
+https://{$INTELSOC_GATEWAY_HOST}:443 {
+	tls {
+		issuer internal
+
+		client_auth {
+			mode require_and_verify
+			trust_pool file "{$INTELSOC_CLIENT_CA}"
+		}
+	}
+
+	@ingestion {
+		method POST
+		path /api/v1/events/windows /api/v1/events/linux
+	}
+
+	handle @ingestion {
+		reverse_proxy 127.0.0.1:8000 {
+			# Device ID is supplied by the endpoint.
+			# FastAPI validates it against the registered device.
+			header_up X-Device-ID {http.request.header.X-Device-ID}
+
+			# Certificate identity is overwritten using values
+			# from the verified mTLS connection.
+			header_up X-IntelSOC-Client-CN {tls_client_subject}
+			header_up X-IntelSOC-Client-CN "^CN=(.*)$" "$1"
+
+			header_up X-IntelSOC-Client-Fingerprint {tls_client_fingerprint}
+
+			# Never trust a client-provided forwarded certificate header.
+			header_up -X-Forwarded-Client-Cert
+		}
+	}
+
+	handle {
+		respond "Not Found" 404
+	}
+}
