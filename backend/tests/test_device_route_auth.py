@@ -79,8 +79,6 @@ def test_windows_ingestion_accepts_matching_registered_device(monkeypatch):
         headers={
             "X-IntelSOC-Key": "intelsoc-test-only-key",
             "X-Device-ID": str(device_id),
-            "X-IntelSOC-Client-CN": "intelsoc-device-win01",
-            "X-IntelSOC-Client-Fingerprint": "AA" * 32,
         },
         json=[sample_windows_record()],
     )
@@ -157,8 +155,6 @@ def test_linux_ingestion_accepts_matching_registered_device(monkeypatch):
         headers={
             "X-IntelSOC-Key": "intelsoc-test-only-key",
             "X-Device-ID": str(device_id),
-            "X-IntelSOC-Client-CN": "intelsoc-device-linux01",
-            "X-IntelSOC-Client-Fingerprint": "CC" * 32,
         },
         json=[sample_linux_record()],
     )

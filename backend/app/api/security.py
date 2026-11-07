@@ -1,4 +1,3 @@
-
 import os
 import secrets
 from pathlib import Path
@@ -7,12 +6,13 @@ from dotenv import load_dotenv
 from fastapi import Header, HTTPException, Security
 from fastapi.security import APIKeyHeader
 
-from app.services.device_service import get_device_by_id, validate_device_identity
+from app.services.device_service import get_device_by_id
 
 
 # Load IntelSOC's existing root .env file.
 ROOT_DIR = Path(__file__).resolve().parents[3]
 load_dotenv(ROOT_DIR / ".env")
+
 
 api_key_header = APIKeyHeader(
     name="X-IntelSOC-Key",
@@ -40,16 +40,11 @@ def verify_ingest_key(
             detail="Invalid or missing ingestion API key",
         )
 
+
 def verify_registered_device(
     submitted_device_id: str | None,
-    certificate_common_name: str | None,
-    certificate_fingerprint: str | None,
 ) -> dict:
-    if (
-        not submitted_device_id
-        or not certificate_common_name
-        or not certificate_fingerprint
-    ):
+    if not submitted_device_id:
         raise HTTPException(
             status_code=401,
             detail="Missing device identity",
@@ -63,19 +58,13 @@ def verify_registered_device(
             detail="Unknown device",
         )
 
-    if not validate_device_identity(
-        device=device,
-        submitted_device_id=submitted_device_id,
-        certificate_common_name=certificate_common_name,
-        certificate_fingerprint=certificate_fingerprint,
-    ):
+    if device.get("status") != "active":
         raise HTTPException(
             status_code=401,
-            detail="Device identity mismatch",
+            detail="Inactive device",
         )
 
     return device
-
 
 
 def verify_ingest_device(
@@ -83,26 +72,10 @@ def verify_ingest_device(
         default=None,
         alias="X-Device-ID",
     ),
-    certificate_common_name: str | None = Header(
-        default=None,
-        alias="X-IntelSOC-Client-CN",
-    ),
-    certificate_fingerprint: str | None = Header(
-        default=None,
-        alias="X-IntelSOC-Client-Fingerprint",
-    ),
 ) -> dict:
     """
-    Validate a registered endpoint identity.
-
-    X-Device-ID is supplied by the endpoint and must match the
-    registered device.
-
-    Certificate CN and fingerprint are trusted only when injected
-    by the mTLS reverse proxy after client-certificate validation.
+    Validate that the endpoint is a registered active IntelSOC device.
     """
     return verify_registered_device(
         submitted_device_id=submitted_device_id,
-        certificate_common_name=certificate_common_name,
-        certificate_fingerprint=certificate_fingerprint,
     )
