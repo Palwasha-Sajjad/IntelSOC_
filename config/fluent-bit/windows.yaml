@@ -34,8 +34,18 @@ pipeline:
       channels: Security
       interval_sec: 1
       read_existing_events: false
-      event_query: '*[System[(EventID=4624 or EventID=4625 or EventID=4740)]]'
+      event_query: '*[System[(EventID=4624 or EventID=4625 or EventID=4740 or EventID=4648 or EventID=4688 or EventID=4698 or EventID=4702 or EventID=4720 or EventID=4722 or EventID=4732 or EventID=1102)]]'
       db: ${INTELSOC_FLUENTBIT_SECURITY_DB}
+      storage.type: filesystem
+
+    # PowerShell Script Block Logging
+    - name: winevtlog
+      tag: intelsoc.windows.powershell
+      channels: Microsoft-Windows-PowerShell/Operational
+      interval_sec: 1
+      read_existing_events: false
+      event_query: '*[System[(EventID=4104)]]'
+      db: ${INTELSOC_FLUENTBIT_POWERSHELL_DB}
       storage.type: filesystem
 
   outputs:
@@ -57,3 +67,4 @@ pipeline:
         - 'X-Device-ID ${INTELSOC_DEVICE_ID}'
 
       retry_limit: false
+
