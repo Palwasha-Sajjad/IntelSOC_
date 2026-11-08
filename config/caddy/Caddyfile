@@ -7,7 +7,7 @@ https://{$INTELSOC_GATEWAY_HOST}:8445 {
 
 	@ingestion {
 		method POST
-		path /api/v1/events/windows /api/v1/events/linux
+		path /api/v1/events/windows /api/v1/events/linux /api/v1/devices/enroll
 	}
 
 	handle @ingestion {

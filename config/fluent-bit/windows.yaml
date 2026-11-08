@@ -1,4 +1,4 @@
-service:
+﻿service:
   flush: 1
   daemon: off
   log_level: info
@@ -50,7 +50,7 @@ pipeline:
       format: json
 
       tls: on
-      tls.verify: off
+      tls.verify: on
 
       header:
         - 'X-IntelSOC-Key ${INTELSOC_INGEST_API_KEY}'
