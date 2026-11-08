@@ -1,9 +1,9 @@
-import os
 from pathlib import Path
 from uuid import uuid4
 
 import psycopg
 from dotenv import load_dotenv
+from app.core.config import get_postgres_config
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -45,11 +45,7 @@ def register_device(
     device_id = uuid4()
 
     with psycopg.connect(
-        host="127.0.0.1",
-        port=5433,
-        dbname="intelsoc",
-        user="intelsoc",
-        password=os.environ["POSTGRES_PASSWORD"],
+        **get_postgres_config(),
         connect_timeout=5,
     ) as connection:
         with connection.cursor() as cursor:
@@ -91,11 +87,7 @@ def register_device(
 
 def get_device_by_id(device_id):
     with psycopg.connect(
-        host="127.0.0.1",
-        port=5433,
-        dbname="intelsoc",
-        user="intelsoc",
-        password=os.environ["POSTGRES_PASSWORD"],
+        **get_postgres_config(),
         connect_timeout=5,
     ) as connection:
         with connection.cursor() as cursor:
@@ -138,12 +130,8 @@ def update_device_last_seen(device_id) -> bool:
 
     try:
         with psycopg.connect(
-            host="127.0.0.1",
-            port=5433,
-            dbname="intelsoc",
-            user="intelsoc",
-            password=os.environ["POSTGRES_PASSWORD"],
-            connect_timeout=5,
+        **get_postgres_config(),
+        connect_timeout=5,
         ) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(

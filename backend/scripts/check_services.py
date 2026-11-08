@@ -5,6 +5,7 @@ from pathlib import Path
 import psycopg
 import redis
 from dotenv import load_dotenv
+from app.core.config import get_postgres_config, get_redis_config
 
 # Find the main IntelSOC folder.
 ROOT = Path(__file__).resolve().parents[2]
@@ -20,11 +21,7 @@ def check_postgresql():
         raise ValueError("POSTGRES_PASSWORD is missing")
 
     with psycopg.connect(
-        host="127.0.0.1",
-        port=5433,
-        dbname="intelsoc",
-        user="intelsoc",
-        password=password,
+        **get_postgres_config(),
         connect_timeout=5,
     ) as connection:
         with connection.cursor() as cursor:
@@ -35,13 +32,8 @@ def check_postgresql():
 
 
 def check_redis():
-    client = redis.Redis(
-        host="127.0.0.1",
-        port=6380,
-        socket_connect_timeout=5,
-        socket_timeout=5,
-    )
-
+    client = redis.Redis(**get_redis_config())
+    
     print("Redis connected:", client.ping())
     client.close()
 

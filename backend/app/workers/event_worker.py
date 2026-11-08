@@ -1,5 +1,4 @@
 ﻿import json
-import os
 from pathlib import Path
 
 import psycopg
@@ -8,6 +7,7 @@ from dotenv import load_dotenv
 from pydantic import ValidationError
 
 from app.schemas.event import SecurityEvent
+from app.core.config import get_postgres_config, get_redis_config
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -25,12 +25,8 @@ def save_event(payload):
     event = SecurityEvent.model_validate_json(payload)
 
     with psycopg.connect(
-        host="127.0.0.1",
-        port=5433,
-        dbname="intelsoc",
-        user="intelsoc",
-        password=os.environ["POSTGRES_PASSWORD"],
-        connect_timeout=5,
+        **get_postgres_config(),
+         connect_timeout=5,
     ) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -104,13 +100,7 @@ def process_message(client, stream_id, fields):
 
 
 def main():
-    client = redis.Redis(
-        host="127.0.0.1",
-        port=6380,
-        decode_responses=True,
-        socket_connect_timeout=5,
-        socket_timeout=5,
-    )
+    client = redis.Redis(**get_redis_config())
 
     try:
         try:

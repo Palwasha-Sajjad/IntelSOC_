@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 import psycopg
@@ -7,7 +6,7 @@ import redis
 from dotenv import load_dotenv
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
-
+from app.core.config import get_postgres_config, get_redis_config
 
 router = APIRouter(tags=["services"])
 
@@ -24,12 +23,8 @@ def check_services():
     # Check PostgreSQL
     try:
         with psycopg.connect(
-            host="127.0.0.1",
-            port=5433,
-            dbname="intelsoc",
-            user="intelsoc",
-            password=os.environ["POSTGRES_PASSWORD"],
-            connect_timeout=3,
+            **get_postgres_config(),
+            connect_timeout=5,
         ) as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT 1")
@@ -42,10 +37,7 @@ def check_services():
     # Check Redis
     try:
         with redis.Redis(
-            host="127.0.0.1",
-            port=6380,
-            socket_connect_timeout=3,
-            socket_timeout=3,
+            **get_redis_config()
         ) as client:
             client.ping()
 

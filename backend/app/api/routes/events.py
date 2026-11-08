@@ -8,6 +8,7 @@ from app.schemas.event import SecurityEvent
 from app.windows_normalizer import normalize_windows_event
 from app.services.device_service import update_device_last_seen
 
+from app.core.config import get_redis_config
 
 router = APIRouter(
     tags=["events"],
@@ -19,12 +20,7 @@ STREAM_NAME = "intelsoc:events"
 
 @router.post("/events", status_code=202)
 def receive_event(event: SecurityEvent):
-    client = redis.Redis(
-        host="127.0.0.1",
-        port=6380,
-        socket_connect_timeout=3,
-        socket_timeout=3,
-    )
+    client = redis.Redis(**get_redis_config())
 
     try:
         stream_id = client.xadd(
