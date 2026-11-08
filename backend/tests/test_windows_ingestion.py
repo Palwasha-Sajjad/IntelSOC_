@@ -176,3 +176,59 @@ def test_large_windows_security_event_is_queued(fake_queue):
     assert payload["event_type"] == "windows_security_event"
     assert payload["message"].endswith(record["Message"].strip())
     assert len(payload["message"]) > 2048
+
+@pytest.mark.parametrize(
+    "event_id,channel,provider",
+    [
+        (4648, "Security", "Microsoft-Windows-Security-Auditing"),
+        (4688, "Security", "Microsoft-Windows-Security-Auditing"),
+        (4698, "Security", "Microsoft-Windows-Security-Auditing"),
+        (4702, "Security", "Microsoft-Windows-Security-Auditing"),
+        (4720, "Security", "Microsoft-Windows-Security-Auditing"),
+        (4722, "Security", "Microsoft-Windows-Security-Auditing"),
+        (4732, "Security", "Microsoft-Windows-Security-Auditing"),
+        (1102, "Security", "Microsoft-Windows-Eventlog"),
+        (
+            4104,
+            "Microsoft-Windows-PowerShell/Operational",
+            "Microsoft-Windows-PowerShell",
+        ),
+    ],
+)
+def test_approved_windows_telemetry_is_accepted(
+    fake_queue,
+    event_id,
+    channel,
+    provider,
+):
+    record = sample_record()
+
+    record["EventID"] = event_id
+    record["EventRecordID"] = 50000 + event_id
+    record["Channel"] = channel
+    record["ProviderName"] = provider
+    record["Message"] = (
+        f"IntelSOC approved telemetry compatibility test "
+        f"for EventID {event_id}"
+    )
+
+    response = client.post(
+        "/api/v1/events/windows",
+        json=[record],
+    )
+
+    assert response.status_code == 202
+    assert response.json()["accepted"] == 1
+
+    payload = json.loads(
+        fake_queue.entries[-1][1]["payload"]
+    )
+
+    assert payload["source"] == "windows_eventlog"
+    assert payload["device_id"] == str(TEST_DEVICE_ID)
+
+    assert payload["raw_event"]["EventID"] == event_id
+    assert payload["raw_event"]["Channel"] == channel
+    assert payload["raw_event"]["ProviderName"] == provider
+
+    assert f"EventID={event_id}" in payload["message"]
