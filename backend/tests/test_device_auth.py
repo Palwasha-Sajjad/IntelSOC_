@@ -37,6 +37,7 @@ def test_verify_registered_device_rejects_missing_device_id():
         )
 
     assert error.value.status_code == 401
+    assert error.value.detail == "Missing device ID"
 
 
 def test_verify_registered_device_rejects_unknown_device(monkeypatch):
@@ -52,6 +53,7 @@ def test_verify_registered_device_rejects_unknown_device(monkeypatch):
         )
 
     assert error.value.status_code == 401
+    assert error.value.detail == "Unknown device"
 
 
 def test_verify_registered_device_rejects_inactive_device(monkeypatch):
@@ -61,7 +63,7 @@ def test_verify_registered_device_rejects_inactive_device(monkeypatch):
         "device_id": device_id,
         "hostname": "LAB-LINUX-01",
         "platform": "linux",
-        "status": "pending",
+        "status": "disabled",
     }
 
     monkeypatch.setattr(
@@ -76,3 +78,4 @@ def test_verify_registered_device_rejects_inactive_device(monkeypatch):
         )
 
     assert error.value.status_code == 401
+    assert error.value.detail == "Device is not active"

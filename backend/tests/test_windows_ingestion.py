@@ -16,8 +16,6 @@ client = TestClient(
     headers={
         "X-IntelSOC-Key": "intelsoc-test-only-key",
         "X-Device-ID": str(TEST_DEVICE_ID),
-        "X-IntelSOC-Client-CN": "intelsoc-device-win-test",
-        "X-IntelSOC-Client-Fingerprint": "AA" * 32,
     },
 )
 

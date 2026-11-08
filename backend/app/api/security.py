@@ -9,7 +9,6 @@ from fastapi.security import APIKeyHeader
 from app.services.device_service import get_device_by_id
 
 
-# Load IntelSOC's existing root .env file.
 ROOT_DIR = Path(__file__).resolve().parents[3]
 load_dotenv(ROOT_DIR / ".env")
 
@@ -23,9 +22,12 @@ api_key_header = APIKeyHeader(
 def verify_ingest_key(
     submitted_key: str | None = Security(api_key_header),
 ) -> None:
+    """
+    Validate the shared IntelSOC ingestion API key.
+    """
+
     expected_key = os.getenv("INTELSOC_INGEST_API_KEY")
 
-    # Fail closed if authentication is not configured.
     if not expected_key:
         raise HTTPException(
             status_code=503,
@@ -33,7 +35,8 @@ def verify_ingest_key(
         )
 
     if not submitted_key or not secrets.compare_digest(
-        submitted_key, expected_key
+        submitted_key,
+        expected_key,
     ):
         raise HTTPException(
             status_code=401,
@@ -44,10 +47,17 @@ def verify_ingest_key(
 def verify_registered_device(
     submitted_device_id: str | None,
 ) -> dict:
+    """
+    Validate an IntelSOC endpoint using only its registered device ID.
+
+    Certificate CN and fingerprint authentication are intentionally
+    not used in the final Module 1 architecture.
+    """
+
     if not submitted_device_id:
         raise HTTPException(
             status_code=401,
-            detail="Missing device identity",
+            detail="Missing device ID",
         )
 
     device = get_device_by_id(submitted_device_id)
@@ -58,10 +68,16 @@ def verify_registered_device(
             detail="Unknown device",
         )
 
+    if str(device.get("device_id")) != str(submitted_device_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Device identity mismatch",
+        )
+
     if device.get("status") != "active":
         raise HTTPException(
             status_code=401,
-            detail="Inactive device",
+            detail="Device is not active",
         )
 
     return device
@@ -74,8 +90,9 @@ def verify_ingest_device(
     ),
 ) -> dict:
     """
-    Validate that the endpoint is a registered active IntelSOC device.
+    Authenticate an ingestion endpoint using X-Device-ID.
     """
+
     return verify_registered_device(
         submitted_device_id=submitted_device_id,
     )
