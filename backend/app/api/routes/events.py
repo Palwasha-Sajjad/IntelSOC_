@@ -9,6 +9,9 @@ from app.windows_normalizer import normalize_windows_event
 from app.services.device_service import update_device_last_seen
 
 from app.core.config import get_redis_config
+from app.linux_audit_normalizer import normalize_linux_audit_event
+from app.linux_normalizer import normalize_linux_event
+
 
 router = APIRouter(
     tags=["events"],
@@ -92,8 +95,6 @@ def receive_linux_events(
 ):
     """Receive raw Linux journal events from Fluent Bit."""
 
-    from app.linux_normalizer import normalize_linux_event
-
     if not records:
         raise HTTPException(
             status_code=422,
@@ -104,7 +105,14 @@ def receive_linux_events(
         normalized_events = []
 
         for record in records:
-            normalized = normalize_linux_event(record)
+            if "log" in record:
+                normalized = normalize_linux_audit_event(
+                    record,
+                    hostname=device["hostname"],
+                )
+            else:
+                normalized = normalize_linux_event(record)
+
             normalized["device_id"] = device["device_id"]
 
             normalized_events.append(

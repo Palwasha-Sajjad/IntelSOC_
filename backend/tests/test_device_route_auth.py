@@ -1,7 +1,9 @@
-from uuid import uuid4
+﻿from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
+from app.api import security
+from app.api.routes import events
 from app.main import app
 
 
@@ -244,3 +246,119 @@ def test_successful_windows_ingestion_updates_last_seen(monkeypatch):
 
     assert response.status_code == 202
     assert seen == [device_id]
+
+def sample_linux_audit_record():
+    return {
+        "log": (
+            "type=USER_MGMT "
+            "msg=audit(1793971000.123:501): "
+            "pid=1234 uid=0 auid=1000 "
+            'acct="newuser" res=success'
+        )
+    }
+
+
+def test_linux_audit_event_is_accepted(
+    monkeypatch,
+):
+    device_id = uuid4()
+
+    device = {
+        "device_id": device_id,
+        "hostname": "LAB-LINUX-01",
+        "platform": "linux",
+        "status": "active",
+    }
+
+    monkeypatch.setattr(
+        security,
+        "get_device_by_id",
+        lambda value: device,
+    )
+
+    queued = []
+
+    def fake_receive_event(event):
+        queued.append(event)
+
+        return {
+            "status": "queued",
+            "event_id": str(event.event_id),
+            "stream_id": "1-0",
+        }
+
+    monkeypatch.setattr(
+        events,
+        "receive_event",
+        fake_receive_event,
+    )
+
+    monkeypatch.setattr(
+        events,
+        "update_device_last_seen",
+        lambda value: None,
+    )
+
+    response = client.post(
+        "/api/v1/events/linux",
+        headers={
+            "X-Device-ID": str(device_id),
+        },
+        json=[sample_linux_audit_record()],
+    )
+
+    assert response.status_code == 202
+    assert response.json()["accepted"] == 1
+
+    assert len(queued) == 1
+
+    event = queued[0]
+
+    assert event.source == "linux_audit"
+    assert event.event_type == (
+        "linux_account_audit_event"
+    )
+    assert event.hostname == "LAB-LINUX-01"
+    assert event.device_id == device_id
+
+    assert (
+        event.raw_event
+        == sample_linux_audit_record()
+    )
+
+
+def test_linux_unsupported_audit_type_is_rejected(
+    monkeypatch,
+):
+    device_id = uuid4()
+
+    device = {
+        "device_id": device_id,
+        "hostname": "LAB-LINUX-01",
+        "platform": "linux",
+        "status": "active",
+    }
+
+    monkeypatch.setattr(
+        security,
+        "get_device_by_id",
+        lambda value: device,
+    )
+
+    record = {
+        "log": (
+            "type=EXECVE "
+            "msg=audit(1793971000.123:502): "
+            'argc=1 a0="/usr/bin/id"'
+        )
+    }
+
+    response = client.post(
+        "/api/v1/events/linux",
+        headers={
+            "X-Device-ID": str(device_id),
+        },
+        json=[record],
+    )
+
+    assert response.status_code == 422
