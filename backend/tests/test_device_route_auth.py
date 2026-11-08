@@ -190,3 +190,57 @@ def test_linux_ingestion_accepts_active_device(monkeypatch):
     assert response.status_code == 202
     assert response.json()["accepted"] == 1
     assert len(fake_redis.entries) == 1
+
+
+def test_successful_windows_ingestion_updates_last_seen(monkeypatch):
+    from uuid import uuid4
+
+    from app.api import security
+    from app.api.routes import events
+
+    device_id = uuid4()
+
+    device = {
+        "device_id": device_id,
+        "hostname": "LAB-WIN-01",
+        "platform": "windows",
+        "status": "active",
+    }
+
+    monkeypatch.setattr(
+        security,
+        "get_device_by_id",
+        lambda value: device,
+    )
+
+    class FakeRedis:
+        def xadd(self, stream, fields):
+            return b"1-0"
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        events.redis,
+        "Redis",
+        lambda **kwargs: FakeRedis(),
+    )
+
+    seen = []
+
+    monkeypatch.setattr(
+        events,
+        "update_device_last_seen",
+        lambda value: seen.append(value) or True,
+    )
+
+    response = client.post(
+        "/api/v1/events/windows",
+        headers={
+            "X-Device-ID": str(device_id),
+        },
+        json=[sample_windows_record()],
+    )
+
+    assert response.status_code == 202
+    assert seen == [device_id]

@@ -127,3 +127,39 @@ def get_device_by_id(device_id):
         "created_at": row[4],
         "last_seen_at": row[5],
     }
+
+
+def update_device_last_seen(device_id) -> bool:
+    """
+    Record the last successful ingestion time for an active device.
+
+    Failure to update this metadata must not interrupt event ingestion.
+    """
+
+    try:
+        with psycopg.connect(
+            host="127.0.0.1",
+            port=5433,
+            dbname="intelsoc",
+            user="intelsoc",
+            password=os.environ["POSTGRES_PASSWORD"],
+            connect_timeout=5,
+        ) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE registered_devices
+                    SET last_seen_at = NOW()
+                    WHERE device_id = %s
+                      AND status = 'active'
+                    RETURNING device_id
+                    """,
+                    (device_id,),
+                )
+
+                row = cursor.fetchone()
+
+        return row is not None
+
+    except psycopg.Error:
+        return False

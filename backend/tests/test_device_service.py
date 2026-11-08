@@ -192,3 +192,57 @@ def test_get_device_by_id_returns_none_when_missing(monkeypatch):
     )
 
     assert get_device_by_id(uuid4()) is None
+
+
+def test_update_device_last_seen_updates_active_device(monkeypatch):
+    from uuid import uuid4
+
+    from app.services.device_service import update_device_last_seen
+
+    device_id = uuid4()
+    captured = {}
+
+    class FakeCursor:
+        def execute(self, sql, params):
+            captured["sql"] = sql
+            captured["params"] = params
+
+        def fetchone(self):
+            return (device_id,)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeConnection:
+        def cursor(self):
+            return FakeCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    import app.services.device_service as device_service
+
+    monkeypatch.setenv(
+        "POSTGRES_PASSWORD",
+        "test-only-password",
+    )
+
+    monkeypatch.setattr(
+        device_service.psycopg,
+        "connect",
+        lambda **kwargs: FakeConnection(),
+    )
+
+    result = update_device_last_seen(device_id)
+
+    assert result is True
+    assert captured["params"] == (device_id,)
+    assert "UPDATE registered_devices" in captured["sql"]
+    assert "last_seen_at = NOW()" in captured["sql"]
+    assert "status = 'active'" in captured["sql"]

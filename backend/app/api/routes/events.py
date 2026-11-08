@@ -1,4 +1,4 @@
-﻿from typing import Any
+from typing import Any
 
 import redis
 from fastapi import APIRouter, Depends, HTTPException
@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.api.security import verify_ingest_device, verify_ingest_key
 from app.schemas.event import SecurityEvent
 from app.windows_normalizer import normalize_windows_event
+from app.services.device_service import update_device_last_seen
 
 
 router = APIRouter(
@@ -79,6 +80,8 @@ def receive_windows_events(
 
     for event in normalized_events:
         receive_event(event)
+       
+    update_device_last_seen(device["device_id"])
 
     return {
         "status": "queued",
@@ -120,7 +123,8 @@ def receive_linux_events(
 
     for event in normalized_events:
         receive_event(event)
-
+    update_device_last_seen(device["device_id"])
+    
     return {
         "status": "queued",
         "accepted": len(normalized_events),
