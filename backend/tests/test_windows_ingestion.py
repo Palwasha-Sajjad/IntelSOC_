@@ -40,8 +40,6 @@ def registered_test_device(monkeypatch):
         "device_id": TEST_DEVICE_ID,
         "hostname": "LAB-PC",
         "platform": "windows",
-        "certificate_common_name": "intelsoc-device-win-test",
-        "certificate_fingerprint": "AA" * 32,
         "status": "active",
     }
 
