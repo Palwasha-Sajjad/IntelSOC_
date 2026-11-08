@@ -73,9 +73,9 @@ def test_same_audit_record_has_same_id():
 def test_unsupported_audit_type_is_rejected():
     record = {
         "log": (
-            "type=EXECVE "
+            "type=SOCKADDR "
             "msg=audit(1793962000.123:456): "
-            'argc=1 a0="/usr/bin/id"'
+            "saddr=02000050C0000201"
         )
     }
 
@@ -123,3 +123,137 @@ def test_hostname_comes_from_trusted_device():
         result["hostname"]
         == "registered-linux-device"
     )
+
+
+@pytest.mark.parametrize(
+    "record_type,body",
+    [
+        (
+            "SYSCALL",
+            (
+                "arch=c000003e syscall=59 "
+                "success=yes "
+                "pid=2200 ppid=2100 "
+                'comm="id" '
+                'exe="/usr/bin/id"'
+            ),
+        ),
+        (
+            "EXECVE",
+            (
+                "argc=2 "
+                'a0="/usr/bin/id" '
+                'a1="-u"'
+            ),
+        ),
+        (
+            "PROCTITLE",
+            "proctitle=2F7573722F62696E2F6964",
+        ),
+        (
+            "CWD",
+            'cwd="/home/socadmin"',
+        ),
+        (
+            "PATH",
+            (
+                "item=0 "
+                'name="/usr/bin/id" '
+                "inode=12345"
+            ),
+        ),
+    ],
+)
+def test_supported_process_audit_record(
+    record_type,
+    body,
+):
+    record = {
+        "log": (
+            f"type={record_type} "
+            "msg=audit(1793963000.456:700): "
+            f"{body}"
+        )
+    }
+
+    result = normalize_linux_audit_event(
+        record,
+        hostname="linux-agent",
+    )
+
+    event = SecurityEvent.model_validate(
+        result
+    )
+
+    assert event.source == "linux_audit"
+
+    assert (
+        event.event_type
+        == "linux_process_audit_event"
+    )
+
+    assert (
+        f"type={record_type}"
+        in event.message
+    )
+
+    assert event.raw_event == record
+
+
+def test_multiple_path_records_do_not_collide():
+    first = {
+        "log": (
+            "type=PATH "
+            "msg=audit(1793963000.456:700): "
+            'item=0 name="/usr/bin/id"'
+        )
+    }
+
+    second = {
+        "log": (
+            "type=PATH "
+            "msg=audit(1793963000.456:700): "
+            'item=1 name="/lib/test.so"'
+        )
+    }
+
+    first_result = normalize_linux_audit_event(
+        first,
+        hostname="linux-agent",
+    )
+
+    second_result = normalize_linux_audit_event(
+        second,
+        hostname="linux-agent",
+    )
+
+    assert (
+        first_result["event_id"]
+        != second_result["event_id"]
+    )
+
+
+def test_same_process_audit_record_is_deterministic():
+    record = {
+        "log": (
+            "type=EXECVE "
+            "msg=audit(1793963000.456:701): "
+            'argc=1 a0="/usr/bin/id"'
+        )
+    }
+
+    first = normalize_linux_audit_event(
+        record,
+        hostname="linux-agent",
+    )
+
+    second = normalize_linux_audit_event(
+        record,
+        hostname="linux-agent",
+    )
+
+    assert (
+        first["event_id"]
+        == second["event_id"]
+    )
+

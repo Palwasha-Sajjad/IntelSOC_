@@ -347,9 +347,9 @@ def test_linux_unsupported_audit_type_is_rejected(
 
     record = {
         "log": (
-            "type=EXECVE "
+            "type=SOCKADDR "
             "msg=audit(1793971000.123:502): "
-            'argc=1 a0="/usr/bin/id"'
+            "saddr=02000050C0000201"
         )
     }
 
@@ -362,3 +362,4 @@ def test_linux_unsupported_audit_type_is_rejected(
     )
 
     assert response.status_code == 422
+
