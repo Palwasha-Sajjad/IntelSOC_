@@ -72,8 +72,16 @@ def save_event(payload):
 def process_message(client, stream_id, fields):
     """Store valid events; transfer invalid events to the DLQ."""
 
+    payload = fields.get("payload")
+
+    if payload is None:
+        payload = fields.get(b"payload")
+
     try:
-        save_event(fields["payload"])
+        if payload is None:
+            raise KeyError("payload")
+
+        save_event(payload)
 
     except (ValidationError, KeyError) as error:
         with client.pipeline(transaction=True) as pipe:
@@ -81,7 +89,7 @@ def process_message(client, stream_id, fields):
                 DLQ_STREAM,
                 {
                     "original_stream_id": stream_id,
-                    "payload": fields.get("payload", ""),
+                    "payload": payload if payload is not None else "",
                     "error_type": type(error).__name__,
                 },
             )

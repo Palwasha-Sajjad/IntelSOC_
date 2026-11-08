@@ -181,3 +181,29 @@ def test_save_event_persists_original_raw_event(monkeypatch):
 
     assert stored_raw_event == raw_event
     assert stored_raw_event["CustomEvidence"] == "preserve-this"
+
+def test_valid_event_accepts_redis_byte_field_name(monkeypatch):
+    client = MagicMock()
+    saved = []
+
+    monkeypatch.setattr(
+        worker,
+        "save_event",
+        lambda payload: saved.append(payload),
+    )
+
+    result = worker.process_message(
+        client,
+        b"16-0",
+        {b"payload": b"valid"},
+    )
+
+    assert result == "saved"
+    assert saved == [b"valid"]
+
+    client.xack.assert_called_once_with(
+        worker.STREAM,
+        worker.GROUP,
+        b"16-0",
+    )
+    client.pipeline.assert_not_called()
