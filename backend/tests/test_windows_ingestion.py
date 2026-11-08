@@ -90,7 +90,7 @@ def test_windows_event_is_queued(fake_queue):
     assert stream == "intelsoc:events"
     assert payload["source"] == "windows_eventlog"
     assert payload["hostname"] == "LAB-PC"
-
+    assert payload["device_id"] == str(TEST_DEVICE_ID)
 
 def test_invalid_batch_is_rejected(fake_queue):
     valid = sample_record()

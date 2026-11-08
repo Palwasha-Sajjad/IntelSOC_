@@ -1,14 +1,12 @@
-import redis
+﻿from typing import Any
 
+import redis
 from fastapi import APIRouter, Depends, HTTPException
 
+from app.api.security import verify_ingest_device, verify_ingest_key
 from app.schemas.event import SecurityEvent
-
-from typing import Any
-
 from app.windows_normalizer import normalize_windows_event
 
-from app.api.security import verify_ingest_device, verify_ingest_key
 
 router = APIRouter(
     tags=["events"],
@@ -20,7 +18,6 @@ STREAM_NAME = "intelsoc:events"
 
 @router.post("/events", status_code=202)
 def receive_event(event: SecurityEvent):
-
     client = redis.Redis(
         host="127.0.0.1",
         port=6380,
@@ -43,7 +40,7 @@ def receive_event(event: SecurityEvent):
     except redis.RedisError:
         raise HTTPException(
             status_code=503,
-            detail="Event queue unavailable"
+            detail="Event queue unavailable",
         )
 
     finally:
@@ -63,21 +60,23 @@ def receive_windows_events(
             detail="Windows event batch cannot be empty",
         )
 
-    # Validate the entire batch before queueing anything.
     try:
-        normalized_events = [
-            SecurityEvent.model_validate(
-                normalize_windows_event(record)
+        normalized_events = []
+
+        for record in records:
+            normalized = normalize_windows_event(record)
+            normalized["device_id"] = device["device_id"]
+
+            normalized_events.append(
+                SecurityEvent.model_validate(normalized)
             )
-            for record in records
-        ]
+
     except (ValueError, TypeError) as error:
         raise HTTPException(
             status_code=422,
             detail=f"Invalid Windows event: {error}",
         ) from error
 
-    # Reuse our existing Redis ingestion function.
     for event in normalized_events:
         receive_event(event)
 
@@ -86,12 +85,13 @@ def receive_windows_events(
         "accepted": len(normalized_events),
     }
 
+
 @router.post("/events/linux", status_code=202)
 def receive_linux_events(
     records: list[dict[str, Any]],
     device: dict = Depends(verify_ingest_device),
 ):
-    """Receive Linux SSH journal records from Fluent Bit."""
+    """Receive raw Linux journal events from Fluent Bit."""
 
     from app.linux_normalizer import normalize_linux_event
 
@@ -102,12 +102,16 @@ def receive_linux_events(
         )
 
     try:
-        normalized_events = [
-            SecurityEvent.model_validate(
-                normalize_linux_event(record)
+        normalized_events = []
+
+        for record in records:
+            normalized = normalize_linux_event(record)
+            normalized["device_id"] = device["device_id"]
+
+            normalized_events.append(
+                SecurityEvent.model_validate(normalized)
             )
-            for record in records
-        ]
+
     except (ValueError, TypeError) as error:
         raise HTTPException(
             status_code=422,

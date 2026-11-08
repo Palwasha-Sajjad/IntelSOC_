@@ -1,6 +1,4 @@
-
-from datetime import datetime
-from uuid import UUID, uuid4
+﻿from uuid import UUID, uuid4
 
 from pydantic import AwareDatetime, BaseModel, Field
 
@@ -9,6 +7,7 @@ class SecurityEvent(BaseModel):
     schema_version: str = "1.0"
 
     event_id: UUID = Field(default_factory=uuid4)
+    device_id: UUID | None = None
 
     timestamp: AwareDatetime
 

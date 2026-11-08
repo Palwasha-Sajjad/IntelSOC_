@@ -1,5 +1,5 @@
-
-from unittest.mock import MagicMock
+﻿from unittest.mock import MagicMock
+from uuid import uuid4
 
 import psycopg
 import pytest
@@ -124,6 +124,8 @@ def test_dlq_failure_not_silently_ignored(monkeypatch):
 def test_save_event_persists_original_raw_event(monkeypatch):
     import json
 
+    device_id = uuid4()
+
     raw_event = {
         "EventRecordID": 99999,
         "EventID": 4625,
@@ -138,6 +140,7 @@ def test_save_event_persists_original_raw_event(monkeypatch):
         hostname="LAB-PC",
         event_type="windows_security_event",
         message="Normalized event message",
+        device_id=device_id,
         raw_event=raw_event,
     )
 
@@ -172,7 +175,9 @@ def test_save_event_persists_original_raw_event(monkeypatch):
 
     worker.save_event(event.model_dump_json())
 
-    stored_raw_event = json.loads(executed["params"][8])
+    assert executed["params"][1] == device_id
+
+    stored_raw_event = json.loads(executed["params"][9])
 
     assert stored_raw_event == raw_event
     assert stored_raw_event["CustomEvidence"] == "preserve-this"
