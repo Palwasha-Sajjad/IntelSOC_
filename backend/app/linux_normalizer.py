@@ -2,8 +2,36 @@
 from uuid import NAMESPACE_URL, uuid5
 
 
+def _classify_linux_record(record: dict) -> str:
+    """Return the supported IntelSOC Linux event type."""
+
+    if record.get("_SYSTEMD_UNIT") == "ssh.service":
+        return "linux_ssh_event"
+
+    syslog_identifier = str(
+        record.get("SYSLOG_IDENTIFIER") or ""
+    ).strip().lower()
+
+    command = str(
+        record.get("_COMM") or ""
+    ).strip().lower()
+
+    if syslog_identifier == "sudo" or command == "sudo":
+        return "linux_sudo_event"
+
+    raise ValueError(
+        "Unsupported Linux journal event source"
+    )
+
+
 def normalize_linux_event(record: dict) -> dict:
-    """Convert a Linux SSH journal record to IntelSOC's event schema."""
+    """
+    Convert a supported Linux journal record to IntelSOC's event schema.
+
+    Supported sources:
+    - ssh.service
+    - sudo journal records
+    """
 
     if not isinstance(record, dict):
         raise ValueError("Linux event must be a JSON object")
@@ -17,44 +45,62 @@ def normalize_linux_event(record: dict) -> dict:
 
     for field in required:
         if field not in record:
-            raise ValueError(f"Missing Linux event field: {field}")
+            raise ValueError(
+                f"Missing Linux event field: {field}"
+            )
 
-    if record.get("_SYSTEMD_UNIT") != "ssh.service":
-        raise ValueError("Only SSH service events are accepted")
+    event_type = _classify_linux_record(record)
 
     hostname = str(record["_HOSTNAME"]).strip()
     boot_id = str(record["_BOOT_ID"]).strip()
     message = str(record["MESSAGE"]).strip()
 
     if not hostname or not boot_id or not message:
-        raise ValueError("Linux event contains empty required fields")
+        raise ValueError(
+            "Linux event contains empty required fields"
+        )
 
     try:
-        microseconds = int(record["_SOURCE_REALTIME_TIMESTAMP"])
+        microseconds = int(
+            record["_SOURCE_REALTIME_TIMESTAMP"]
+        )
 
         if microseconds <= 0:
-            raise ValueError("Timestamp must be positive")
+            raise ValueError(
+                "Timestamp must be positive"
+            )
 
         timestamp = datetime.fromtimestamp(
             microseconds / 1_000_000,
             tz=timezone.utc,
         )
 
-    except (ValueError, TypeError, OverflowError, OSError) as error:
-        raise ValueError("Invalid Linux journal timestamp") from error
+    except (
+        ValueError,
+        TypeError,
+        OverflowError,
+        OSError,
+    ) as error:
+        raise ValueError(
+            "Invalid Linux journal timestamp"
+        ) from error
 
     identity = (
         f"linux-journald:{hostname}:{boot_id}:"
-        f"{microseconds}:{record.get('_PID', '')}:{message}"
+        f"{microseconds}:"
+        f"{record.get('_PID', '')}:"
+        f"{message}"
     )
 
     return {
         "schema_version": "1.0",
-        "event_id": str(uuid5(NAMESPACE_URL, identity)),
+        "event_id": str(
+            uuid5(NAMESPACE_URL, identity)
+        ),
         "timestamp": timestamp.isoformat(),
         "source": "linux_journald",
         "hostname": hostname,
-        "event_type": "linux_ssh_event",
+        "event_type": event_type,
         "src_ip": None,
         "message": message[:2048],
         "raw_event": dict(record),
