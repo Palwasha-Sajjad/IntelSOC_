@@ -21,6 +21,9 @@ from app.services.detection_service import (
     mark_event_analysis_processed,
     persist_detection,
 )
+from app.services.incident_service import (
+    correlate_alert_to_incident,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -150,7 +153,8 @@ def analyze_once(
 
     Detections are persisted only when their threshold-crossing event belongs
     to the current unprocessed batch. Historical lookback is context only.
-    Each persisted detection is then mapped to exactly one security alert.
+    Each persisted detection maps to one alert, and each alert is then
+    correlated into one incident before source events are marked processed.
     """
 
     pending = fetch_unprocessed_failed_login_events(
@@ -164,6 +168,8 @@ def analyze_once(
             "detections_reused": 0,
             "alerts_created": 0,
             "alerts_reused": 0,
+            "incidents_created": 0,
+            "incidents_reused": 0,
             "events_failed": 0,
         }
 
@@ -195,10 +201,10 @@ def analyze_once(
         detections_reused = 0
         alerts_created = 0
         alerts_reused = 0
+        incidents_created = 0
+        incidents_reused = 0
 
         for candidate in candidates:
-            # Only persist a detection whose threshold-crossing event is
-            # part of this batch. Earlier detections are historical context.
             if (
                 not candidate.event_ids
                 or candidate.event_ids[-1]
@@ -222,6 +228,15 @@ def analyze_once(
             else:
                 alerts_reused += 1
 
+            incident = correlate_alert_to_incident(
+                alert.alert_id
+            )
+
+            if incident.created:
+                incidents_created += 1
+            else:
+                incidents_reused += 1
+
         for event in pending:
             mark_event_analysis_processed(
                 UUID(event["event_id"])
@@ -233,6 +248,8 @@ def analyze_once(
             "detections_reused": detections_reused,
             "alerts_created": alerts_created,
             "alerts_reused": alerts_reused,
+            "incidents_created": incidents_created,
+            "incidents_reused": incidents_reused,
             "events_failed": 0,
         }
 
@@ -244,8 +261,6 @@ def analyze_once(
                     str(error),
                 )
             except Exception:
-                # Preserve the original analysis failure. A later cycle can
-                # retry rows whose state was not updated.
                 pass
 
         raise
