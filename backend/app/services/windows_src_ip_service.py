@@ -5,6 +5,7 @@ Dry-run by default. Each run examines at most 'limit' candidate rows.
 """
 import ipaddress
 from dataclasses import dataclass
+from uuid import UUID
 
 import psycopg
 
@@ -18,6 +19,7 @@ class EnrichmentReport:
     valid_ips: int
     updated: int
     dry_run: bool
+    next_after_event_id: str | None
 
 
 def source_ip_from_4625(raw_event: object) -> str | None:
@@ -45,6 +47,7 @@ def source_ip_from_4625(raw_event: object) -> str | None:
 
 def enrich_stored_windows_4625_ips(
     *, limit: int = 500, apply: bool = False,
+    after_event_id: UUID | str | None = None,
 ) -> EnrichmentReport:
     """Scan a bounded set of stored events and optionally fill missing IPs.
 
@@ -53,6 +56,9 @@ def enrich_stored_windows_4625_ips(
     """
     if not 1 <= limit <= 5000:
         raise ValueError("limit must be between 1 and 5000")
+
+    if after_event_id is not None:
+        after_event_id = UUID(str(after_event_id))
 
     with psycopg.connect(
         **get_postgres_config(), connect_timeout=5,
@@ -67,10 +73,11 @@ def enrich_stored_windows_4625_ips(
                   AND raw_event->>'EventID' = '4625'
                   AND src_ip IS NULL
                   AND device_id IS NOT NULL
+                  AND (%s::uuid IS NULL OR event_id > %s::uuid)
                 ORDER BY event_id
                 LIMIT %s
                 """,
-                (limit,),
+                (after_event_id, after_event_id, limit),
             )
             rows = cursor.fetchall()
 
@@ -107,4 +114,5 @@ def enrich_stored_windows_4625_ips(
     return EnrichmentReport(
         examined=len(rows), valid_ips=valid_ips,
         updated=updated, dry_run=not apply,
+        next_after_event_id=str(rows[-1][0]) if rows else None,
     )
