@@ -332,3 +332,29 @@ def test_no_user_no_source_alert_is_not_grouped_by_device_only(monkeypatch):
     assert lookup[0].args[1][0] != incident_service.build_incident_correlation_key(
         device_id=existing[4], target_user=None, source_ip=None,
     )
+
+
+def test_win003_incident_uses_own_isolated_correlation_key(monkeypatch):
+    import hashlib
+    alert_id = uuid4()
+    cursor = MagicMock()
+    baseline = alert_row(alert_id=alert_id)
+    win003_row = (
+        alert_id, "RULE-WIN-003", "Member Added to Local Administrators",
+        "high", baseline[4], "S-1-5-21-1-2-3-1001", None, NOW,
+    )
+    cursor.fetchone.side_effect = [None, win003_row, None, (alert_id,)]
+    monkeypatch.setattr(
+        incident_service.psycopg, "connect",
+        lambda **kwargs: connection_with_cursor(cursor),
+    )
+    incident_service.correlate_alert_to_incident(alert_id)
+    lookup = [
+        call for call in cursor.execute.call_args_list
+        if "FROM incidents" in call.args[0]
+    ]
+    assert len(lookup) == 1
+    expected = hashlib.sha256(
+        f"isolated|RULE-WIN-003|{alert_id}".encode("utf-8")
+    ).hexdigest()
+    assert lookup[0].args[1][0] == expected
