@@ -18,6 +18,10 @@ from app.analysis.failed_then_success_rule import (
     WINDOW as AUTH_CORRELATION_WINDOW,
     correlate_failed_then_successful_logins,
 )
+from app.analysis.explicit_credentials_rule import (
+    RULE_ID as EXPLICIT_CREDENTIAL_RULE_ID,
+    detect_unusual_explicit_credentials,
+)
 from app.analysis.script_block_rule import (
     RULE_ID as SCRIPT_BLOCK_RULE_ID,
     detect_suspicious_script_block,
@@ -1359,6 +1363,98 @@ def analyze_script_blocks_once(*, limit: int = 25) -> dict[str, int]:
             print(f"WIN-011 block failed: {error}", flush=True)
     return result
 
+
+
+def fetch_unprocessed_explicit_credential_events(
+    *, limit: int = BATCH_SIZE,
+) -> list[dict[str, Any]]:
+    """Read authentic 4648 evidence, isolated by WIN-012 processing state."""
+    with psycopg.connect(
+        **get_postgres_config(), connect_timeout=5,
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT e.event_id, e.device_id, e.event_time, e.raw_event
+                FROM security_events e
+                LEFT JOIN event_rule_analysis_state s
+                  ON s.event_id = e.event_id AND s.rule_id = %s
+                WHERE e.source = 'windows_eventlog'
+                  AND e.event_type = 'windows_security_event'
+                  AND e.device_id IS NOT NULL
+                  AND e.raw_event->>'EventID' = '4648'
+                  AND lower(e.raw_event->>'Channel') = 'security'
+                  AND lower(e.raw_event->>'ProviderName') =
+                      'microsoft-windows-security-auditing'
+                  AND (s.event_id IS NULL OR s.status = 'failed')
+                ORDER BY e.event_time ASC, e.event_id ASC
+                LIMIT %s
+                """,
+                (EXPLICIT_CREDENTIAL_RULE_ID, limit),
+            )
+            rows = cursor.fetchall()
+    return [
+        {
+            "event_id": str(event_id),
+            "device_id": str(device_id),
+            "event_time": timestamp,
+            "raw_event": raw_event,
+        }
+        for event_id, device_id, timestamp, raw_event in rows
+    ]
+
+
+def analyze_explicit_credentials_once(
+    *, limit: int = BATCH_SIZE,
+) -> dict[str, int]:
+    """Reuse existing idempotent detection, alert, incident services."""
+    pending = fetch_unprocessed_explicit_credential_events(limit=limit)
+    result = {
+        "events_processed": 0,
+        "detections_created": 0,
+        "detections_reused": 0,
+        "alerts_created": 0,
+        "alerts_reused": 0,
+        "incidents_created": 0,
+        "incidents_reused": 0,
+        "events_failed": 0,
+    }
+    for event in pending:
+        event_id = UUID(event["event_id"])
+        try:
+            candidate = detect_unusual_explicit_credentials(event)
+            if candidate is not None:
+                detection = persist_detection(candidate)
+                result[
+                    "detections_created" if detection.created
+                    else "detections_reused"
+                ] += 1
+                alert = create_alert_for_detection(detection.detection_id)
+                result[
+                    "alerts_created" if alert.created
+                    else "alerts_reused"
+                ] += 1
+                incident = correlate_alert_to_incident(alert.alert_id)
+                result[
+                    "incidents_created" if incident.created
+                    else "incidents_reused"
+                ] += 1
+            mark_event_analysis_processed(
+                event_id, EXPLICIT_CREDENTIAL_RULE_ID,
+            )
+            result["events_processed"] += 1
+        except Exception as error:
+            result["events_failed"] += 1
+            try:
+                mark_event_analysis_failed(
+                    event_id, str(error), EXPLICIT_CREDENTIAL_RULE_ID,
+                )
+            except Exception as state_error:
+                print(f"WIN-012 state update failed: {state_error}", flush=True)
+            print(f"WIN-012 event failed: {error}", flush=True)
+    return result
+
+
 def main() -> None:
     print(
         "IntelSOC analysis worker started",
@@ -1378,6 +1474,7 @@ def main() -> None:
         RuleRunner(SCHEDULED_TASK_RULE_ID, analyze_scheduled_tasks_once),
         RuleRunner(PROCESS_CREATION_RULE_ID, analyze_process_creations_once),
         RuleRunner(SCRIPT_BLOCK_RULE_ID, analyze_script_blocks_once),
+        RuleRunner(EXPLICIT_CREDENTIAL_RULE_ID, analyze_explicit_credentials_once),
     )
 
     while True:
