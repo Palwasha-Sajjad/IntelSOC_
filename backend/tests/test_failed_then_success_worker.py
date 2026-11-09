@@ -147,6 +147,10 @@ def test_same_timestamp_preceding_success_suppresses_replay(monkeypatch):
     history = [event(4625, i * 20) for i in range(5)]
     earlier_success = event(4624, 110)
     later_success = event(4624, 110)
+    # The database tie-breaks identical timestamps by UUID event_id.
+    # Ensure this fixture uses the same ordering as the SQL query.
+    earlier_success["event_id"] = "00000000-0000-4000-8000-000000000001"
+    later_success["event_id"] = "00000000-0000-4000-8000-000000000002"
     wire(monkeypatch, [later_success], history + [earlier_success])
     monkeypatch.setattr(
         worker, "mark_event_analysis_processed",
