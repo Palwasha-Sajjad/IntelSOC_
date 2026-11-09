@@ -836,3 +836,122 @@ def test_win005_no_events_noop(monkeypatch):
     result = analysis_worker.analyze_account_disable_delete_once()
     assert result["events_processed"] == 0
     assert result["events_failed"] == 0
+
+
+def account_lockout_event():
+    record = event(0, 0)
+    record["raw_event"] = {
+        "EventID": 4740,
+        "Channel": "Security",
+        "ProviderName": "Microsoft-Windows-Security-Auditing",
+        "StringInserts": [
+            "lockeduser", "LAB", "S-1-5-21-1-2-3-1001",
+            "S-1-5-21-1-2-3-500", "administrator", "LAB",
+            "0x123", "CLIENT-01",
+        ],
+    }
+    return record
+
+
+def test_win006_creates_detection_alert_incident_and_marks_only_its_state(monkeypatch):
+    record = account_lockout_event()
+    monkeypatch.setattr(
+        analysis_worker, "fetch_unprocessed_account_lockout_events",
+        lambda limit: [record],
+    )
+    calls = []
+    monkeypatch.setattr(
+        analysis_worker, "persist_detection",
+        lambda candidate: (
+            calls.append(("detection", candidate.rule_id, candidate.target_user))
+            or DetectionResult(created=True)
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_worker, "create_alert_for_detection",
+        lambda detection_id: AlertResult(created=True),
+    )
+    monkeypatch.setattr(
+        analysis_worker, "correlate_alert_to_incident",
+        lambda alert_id: IncidentResult(created=True),
+    )
+    monkeypatch.setattr(
+        analysis_worker, "mark_event_analysis_processed",
+        lambda event_id, rule_id: calls.append(("processed", rule_id)),
+    )
+    result = analysis_worker.analyze_account_lockout_once()
+    assert result["events_processed"] == 1
+    assert result["detections_created"] == 1
+    assert result["alerts_created"] == 1
+    assert result["incidents_created"] == 1
+    assert result["events_failed"] == 0
+    assert calls == [
+        ("detection", "RULE-WIN-006", "LAB\\lockeduser"),
+        ("processed", "RULE-WIN-006"),
+    ]
+
+
+def test_win006_failure_remains_retryable_without_affecting_other_rules(monkeypatch):
+    record = account_lockout_event()
+    monkeypatch.setattr(
+        analysis_worker, "fetch_unprocessed_account_lockout_events",
+        lambda limit: [record],
+    )
+    monkeypatch.setattr(
+        analysis_worker, "persist_detection",
+        lambda candidate: (_ for _ in ()).throw(RuntimeError("db unavailable")),
+    )
+    failed = []
+    monkeypatch.setattr(
+        analysis_worker, "mark_event_analysis_failed",
+        lambda event_id, error, rule_id: failed.append((error, rule_id)),
+    )
+    monkeypatch.setattr(
+        analysis_worker, "mark_event_analysis_processed",
+        lambda *args: pytest.fail("Must not mark a failed event processed"),
+    )
+    result = analysis_worker.analyze_account_lockout_once()
+    assert result["events_failed"] == 1
+    assert result["events_processed"] == 0
+    assert failed == [("db unavailable", "RULE-WIN-006")]
+
+
+def test_win006_reused_detection_alert_and_incident_on_retry(monkeypatch):
+    record = account_lockout_event()
+    monkeypatch.setattr(
+        analysis_worker, "fetch_unprocessed_account_lockout_events",
+        lambda limit: [record],
+    )
+    monkeypatch.setattr(
+        analysis_worker, "persist_detection",
+        lambda candidate: DetectionResult(created=False),
+    )
+    monkeypatch.setattr(
+        analysis_worker, "create_alert_for_detection",
+        lambda detection_id: AlertResult(created=False),
+    )
+    monkeypatch.setattr(
+        analysis_worker, "correlate_alert_to_incident",
+        lambda alert_id: IncidentResult(created=False),
+    )
+    monkeypatch.setattr(
+        analysis_worker, "mark_event_analysis_processed",
+        lambda event_id, rule_id: None,
+    )
+    result = analysis_worker.analyze_account_lockout_once()
+    assert result["detections_reused"] == 1
+    assert result["alerts_reused"] == 1
+    assert result["incidents_reused"] == 1
+    assert result["detections_created"] == 0
+    assert result["alerts_created"] == 0
+    assert result["incidents_created"] == 0
+
+
+def test_win006_without_pending_events_is_noop(monkeypatch):
+    monkeypatch.setattr(
+        analysis_worker, "fetch_unprocessed_account_lockout_events",
+        lambda limit: [],
+    )
+    result = analysis_worker.analyze_account_lockout_once()
+    assert result["events_processed"] == 0
+    assert result["events_failed"] == 0
