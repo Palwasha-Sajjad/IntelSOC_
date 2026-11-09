@@ -908,10 +908,10 @@ def fetch_unprocessed_auth_success_events(
     ]
 
 
-def fetch_auth_failure_context(
+def fetch_auth_correlation_context(
     success_event: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Read a 5-minute, same-device 4625 window for one successful logon."""
+    """Read earlier 4625 and 4624 events to avoid repeat-success alerts."""
     with psycopg.connect(
         **get_postgres_config(), connect_timeout=5,
     ) as connection:
@@ -923,7 +923,7 @@ def fetch_auth_failure_context(
                 WHERE source = 'windows_eventlog'
                   AND event_type = 'windows_security_event'
                   AND device_id = %s
-                  AND raw_event->>'EventID' = '4625'
+                  AND raw_event->>'EventID' IN ('4625','4624')
                   AND lower(raw_event->>'Channel') = 'security'
                   AND lower(raw_event->>'ProviderName') =
                       'microsoft-windows-security-auditing'
@@ -971,7 +971,7 @@ def analyze_auth_correlation_once(
     for success in pending:
         event_id = UUID(success["event_id"])
         try:
-            history = fetch_auth_failure_context(success)
+            history = fetch_auth_correlation_context(success)
             candidates = correlate_failed_then_successful_logins(
                 [*history, success]
             )
