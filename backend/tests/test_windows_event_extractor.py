@@ -168,3 +168,37 @@ def test_extractor_does_not_mutate_raw_record():
     extract_windows_failed_logon(record)
 
     assert record == original
+
+
+def test_incomplete_inserts_fill_missing_ip_from_message():
+    record = real_shape_local_failed_logon()
+    record["StringInserts"] = record["StringInserts"][:11]
+    record["Message"] = record["Message"].replace(
+        "Source Network Address:\\t-",
+        "Source Network Address:\\t198.51.100.27",
+    )
+    record["Message"] = record["Message"].replace(
+        "Source Port:\\t\\t-",
+        "Source Port:\\t\\t55123",
+    )
+
+    evidence = extract_windows_failed_logon(record)
+
+    assert evidence is not None
+    assert evidence.target_user == "testuser"
+    assert evidence.logon_type == 2
+    assert evidence.source_ip == "198.51.100.27"
+    assert evidence.source_port == 55123
+
+
+def test_complete_inserts_do_not_override_missing_ip_with_message():
+    record = real_shape_local_failed_logon()
+    record["Message"] = record["Message"].replace(
+        "Source Network Address:\\t-",
+        "Source Network Address:\\t198.51.100.27",
+    )
+
+    evidence = extract_windows_failed_logon(record)
+
+    assert evidence is not None
+    assert evidence.source_ip is None
