@@ -18,6 +18,11 @@ from app.analysis.failed_then_success_rule import (
     WINDOW as AUTH_CORRELATION_WINDOW,
     correlate_failed_then_successful_logins,
 )
+from app.analysis.script_block_rule import (
+    RULE_ID as SCRIPT_BLOCK_RULE_ID,
+    detect_suspicious_script_block,
+    is_complete_script_block,
+)
 from app.analysis.process_creation_rule import (
     RULE_ID as PROCESS_CREATION_RULE_ID,
     detect_suspicious_process_creation,
@@ -1219,6 +1224,128 @@ def analyze_process_creations_once(
             print(f"WIN-010 event failed: {error}", flush=True)
     return result
 
+
+
+def fetch_pending_script_block_groups(
+    *, limit: int = 25,
+) -> list[list[dict[str, Any]]]:
+    """Fetch whole script blocks (not LIMIT-ed fragments) for WIN-011.
+
+    Select pending/failed block IDs, then retrieve *all* stored parts. This
+    intentionally defers incomplete blocks; new fragments may arrive later.
+    """
+    with psycopg.connect(
+        **get_postgres_config(), connect_timeout=5,
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                WITH eligible AS (
+                    SELECT e.event_id, e.device_id, e.event_time, e.raw_event,
+                           e.raw_event->'StringInserts'->>3 AS block_id,
+                           s.status
+                    FROM security_events e
+                    LEFT JOIN event_rule_analysis_state s
+                      ON s.event_id=e.event_id AND s.rule_id=%s
+                    WHERE e.source='windows_eventlog'
+                      AND e.event_type =
+                        'windows_microsoft-windows-powershell/operational_event'
+                      AND e.device_id IS NOT NULL
+                      AND e.raw_event->>'EventID'='4104'
+                      AND lower(e.raw_event->>'Channel') =
+                        'microsoft-windows-powershell/operational'
+                      AND lower(e.raw_event->>'ProviderName') =
+                        'microsoft-windows-powershell'
+                      AND jsonb_typeof(e.raw_event->'StringInserts')='array'
+                      AND jsonb_array_length(e.raw_event->'StringInserts')=5
+                ),
+                chosen AS (
+                    SELECT device_id, block_id, MIN(event_time) AS first_seen
+                    FROM eligible
+                    WHERE block_id IS NOT NULL
+                    GROUP BY device_id, block_id
+                    HAVING BOOL_OR(status IS NULL OR status='failed')
+                    ORDER BY first_seen, device_id, block_id
+                    LIMIT %s
+                )
+                SELECT e.event_id, e.device_id, e.event_time, e.raw_event,
+                       e.block_id
+                FROM eligible e JOIN chosen c
+                  ON e.device_id=c.device_id AND e.block_id=c.block_id
+                ORDER BY e.device_id, e.block_id, e.event_time, e.event_id
+                """,
+                (SCRIPT_BLOCK_RULE_ID, limit),
+            )
+            rows = cursor.fetchall()
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for event_id, device_id, timestamp, raw, block_id in rows:
+        key = (str(device_id), block_id.casefold())
+        groups.setdefault(key, []).append({
+            "event_id": str(event_id),
+            "device_id": str(device_id),
+            "event_time": timestamp,
+            "raw_event": raw,
+        })
+    return list(groups.values())
+
+
+def analyze_script_blocks_once(*, limit: int = 25) -> dict[str, int]:
+    """Process complete 4104 blocks with original-event evidence links."""
+    groups = fetch_pending_script_block_groups(limit=limit)
+    result = {
+        "events_processed": 0,
+        "detections_created": 0,
+        "detections_reused": 0,
+        "alerts_created": 0,
+        "alerts_reused": 0,
+        "incidents_created": 0,
+        "incidents_reused": 0,
+        "events_failed": 0,
+    }
+    for group in groups:
+        if not is_complete_script_block(group):
+            # Never acknowledge a missing, duplicated, or inconsistent part.
+            continue
+        try:
+            candidate = detect_suspicious_script_block(group)
+            if candidate is not None:
+                detection = persist_detection(candidate)
+                result[
+                    "detections_created" if detection.created
+                    else "detections_reused"
+                ] += 1
+                alert = create_alert_for_detection(detection.detection_id)
+                result[
+                    "alerts_created" if alert.created
+                    else "alerts_reused"
+                ] += 1
+                incident = correlate_alert_to_incident(alert.alert_id)
+                result[
+                    "incidents_created" if incident.created
+                    else "incidents_reused"
+                ] += 1
+            for event in group:
+                mark_event_analysis_processed(
+                    UUID(event["event_id"]), SCRIPT_BLOCK_RULE_ID,
+                )
+                result["events_processed"] += 1
+        except Exception as error:
+            result["events_failed"] += 1
+            for event in group:
+                try:
+                    mark_event_analysis_failed(
+                        UUID(event["event_id"]), str(error),
+                        SCRIPT_BLOCK_RULE_ID,
+                    )
+                except Exception as state_error:
+                    print(
+                        f"WIN-011 state update failed: {state_error}",
+                        flush=True,
+                    )
+            print(f"WIN-011 block failed: {error}", flush=True)
+    return result
+
+
 def main() -> None:
     print(
         "IntelSOC analysis worker started",
@@ -1237,6 +1364,7 @@ def main() -> None:
         RuleRunner(AUTH_CORRELATION_RULE_ID, analyze_auth_correlation_once),
         RuleRunner(SCHEDULED_TASK_RULE_ID, analyze_scheduled_tasks_once),
         RuleRunner(PROCESS_CREATION_RULE_ID, analyze_process_creations_once),
+        RuleRunner(SCRIPT_BLOCK_RULE_ID, analyze_script_blocks_once),
     )
 
     while True:
