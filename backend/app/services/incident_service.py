@@ -139,11 +139,22 @@ def correlate_alert_to_incident(
                 alert_created_at,
             ) = alert
 
-            correlation_key = build_incident_correlation_key(
-                device_id=device_id,
-                target_user=target_user,
-                source_ip=source_ip,
-            )
+            # An individual log-clear event is not a credential attack
+            # episode. Give it its own incident instead of merging with
+            # another alert on device/user alone. Likewise, unrelated
+            # alerts lacking any subject/IP must never be conflated.
+            if rule_id == "RULE-WIN-002" or (
+                not target_user and not source_ip
+            ):
+                correlation_key = hashlib.sha256(
+                    f"isolated|{rule_id}|{alert_id}".encode("utf-8")
+                ).hexdigest()
+            else:
+                correlation_key = build_incident_correlation_key(
+                    device_id=device_id,
+                    target_user=target_user,
+                    source_ip=source_ip,
+                )
 
             cursor.execute(
                 """
