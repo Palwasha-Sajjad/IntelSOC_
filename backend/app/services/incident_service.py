@@ -143,7 +143,7 @@ def correlate_alert_to_incident(
             # attack episodes just because they share device/user data.
             # Likewise, unrelated
             # alerts lacking any subject/IP must never be conflated.
-            if rule_id in {"RULE-WIN-002", "RULE-WIN-003", "RULE-WIN-004", "RULE-WIN-005"} or (
+            if rule_id in {"RULE-WIN-002", "RULE-WIN-003", "RULE-WIN-004", "RULE-WIN-005", "RULE-WIN-006"} or (
                 not target_user and not source_ip
             ):
                 correlation_key = hashlib.sha256(
