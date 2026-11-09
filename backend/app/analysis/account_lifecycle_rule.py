@@ -47,7 +47,6 @@ def detect_account_lifecycle(
 
     target_name = str(inserts[0] or "").strip()
     target_domain = str(inserts[1] or "").strip()
-    target_sid = str(inserts[2] or "").strip()
     if not target_name or target_name == "-" or target_name.endswith("$"):
         # No verified user name, or the target represents a computer account.
         return None
@@ -68,9 +67,7 @@ def detect_account_lifecycle(
         f"{target_domain}\\{target_name}"
         if target_domain and target_domain != "-" else target_name
     )
-    # Preserve the SID exclusively in the unmodified raw event. Never
-    # mistake SubjectUserSid (the initiating principal) for TargetSid.
-    _ = target_sid
+    # TargetSid and actor fields remain in the unmodified raw evidence.
 
     return DetectionCandidate(
         rule_id=RULE_ID,
