@@ -122,3 +122,51 @@ def enrich_stored_windows_4625_ips(
         updated=updated, dry_run=not apply,
         next_after_event_id=str(rows[-1][0]) if rows else None,
     )
+
+
+def enrich_pending_windows_4625_ips(events: list[dict]) -> int:
+    """Enrich only a worker's just-processed 4625 records.
+
+    Run after core detection persistence. Updates are conditional, bounded
+    by the worker batch, and cannot change event identity or raw evidence.
+    """
+    updates = []
+    for event in events:
+        try:
+            event_id = UUID(str(event["event_id"]))
+            device_id = UUID(str(event["device_id"]))
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+
+        source_ip = source_ip_from_4625(event.get("raw_event"))
+        if source_ip is not None:
+            updates.append((source_ip, event_id, device_id))
+
+    if not updates:
+        return 0
+
+    updated = 0
+    with psycopg.connect(
+        **get_postgres_config(), connect_timeout=5,
+    ) as connection:
+        with connection.cursor() as cursor:
+            for source_ip, event_id, device_id in updates:
+                cursor.execute(
+                    """
+                    UPDATE security_events
+                    SET src_ip = %s
+                    WHERE event_id = %s
+                      AND device_id = %s
+                      AND src_ip IS NULL
+                      AND source = 'windows_eventlog'
+                      AND event_type = 'windows_security_event'
+                      AND raw_event->>'EventID' = '4625'
+                      AND raw_event->>'Channel' = 'Security'
+                      AND raw_event->>'ProviderName' =
+                          'Microsoft-Windows-Security-Auditing'
+                    """,
+                    (source_ip, event_id, device_id),
+                )
+                updated += cursor.rowcount
+
+    return updated
