@@ -279,6 +279,7 @@ def test_generic_candidate_fingerprint_stable_and_rule_scoped():
     {"event_count": 2},
     {"severity": "unknown"},
     {"rule_id": ""},
+    {"device_id": None},
     {"window_end": datetime(2026, 11, 9, 5, 49, tzinfo=timezone.utc)},
     {"window_start": datetime(2026, 11, 9, 5, 50)},
 ])
