@@ -5,12 +5,18 @@ Dry-run by default. Each run examines at most 'limit' candidate rows.
 """
 import ipaddress
 from dataclasses import dataclass
+from pathlib import Path
 from uuid import UUID
 
 import psycopg
+from dotenv import load_dotenv
 
 from app.analysis.windows_event_extractor import extract_windows_failed_logon
 from app.core.config import get_postgres_config
+
+
+ROOT = Path(__file__).resolve().parents[3]
+load_dotenv(ROOT / ".env")
 
 
 @dataclass(frozen=True)
