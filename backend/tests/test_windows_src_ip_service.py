@@ -150,3 +150,36 @@ def test_cursor_and_limit_validation(monkeypatch):
     assert report.next_after_event_id is None
     _, params = connection.cursor_object.executed[0]
     assert params == (after_id, after_id, 10)
+
+
+def test_automatic_enrichment_uses_bound_device_and_evidence(monkeypatch):
+    event_id, device_id = uuid4(), uuid4()
+    raw = record()
+    saved_raw = deepcopy(raw)
+    connection = setup_connection(monkeypatch, [])
+
+    updated = service.enrich_pending_windows_4625_ips([
+        {"event_id": str(event_id), "device_id": str(device_id), "raw_event": raw},
+    ])
+
+    assert updated == 1
+    assert raw == saved_raw
+    assert len(connection.cursor_object.executed) == 1
+    statement, params = connection.cursor_object.executed[0]
+    assert params == ("198.51.100.27", event_id, device_id)
+    assert "src_ip IS NULL" in statement
+    assert "device_id = %s" in statement
+    assert "raw_event->>'ProviderName'" in statement
+
+
+def test_automatic_enrichment_skips_missing_ips_and_identity(monkeypatch):
+    connection = setup_connection(monkeypatch, [])
+    updated = service.enrich_pending_windows_4625_ips([
+        {"event_id": str(uuid4()), "device_id": str(uuid4()), "raw_event": record(ip="-")},
+        {"event_id": str(uuid4()), "device_id": None, "raw_event": record()},
+        {"event_id": "not-a-uuid", "device_id": str(uuid4()), "raw_event": record()},
+        {"event_id": str(uuid4()), "device_id": str(uuid4()), "raw_event": record(provider="Other")},
+    ])
+
+    assert updated == 0
+    assert connection.cursor_object.executed == []
