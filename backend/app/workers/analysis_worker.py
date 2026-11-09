@@ -1265,6 +1265,666 @@ def fetch_pending_script_block_groups(
                     WHERE block_id IS NOT NULL
                     GROUP BY device_id, block_id
                     HAVING BOOL_OR(status IS NULL OR status='failed')
+                       AND COUNT(*) = COUNT(DISTINCT event_id)
+                       AND BOOL_AND(
+                           (raw_event->'StringInserts'->>0) ~ '^[0-9]+
+                    LIMIT %s
+                )
+                SELECT e.event_id, e.device_id, e.event_time, e.raw_event,
+                       e.block_id
+                FROM eligible e JOIN chosen c
+                  ON e.device_id=c.device_id AND e.block_id=c.block_id
+                ORDER BY e.device_id, e.block_id, e.event_time, e.event_id
+                """,
+                (SCRIPT_BLOCK_RULE_ID, limit),
+            )
+            rows = cursor.fetchall()
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for event_id, device_id, timestamp, raw, block_id in rows:
+        key = (str(device_id), block_id.casefold())
+        groups.setdefault(key, []).append({
+            "event_id": str(event_id),
+            "device_id": str(device_id),
+            "event_time": timestamp,
+            "raw_event": raw,
+        })
+    return list(groups.values())
+
+
+def analyze_script_blocks_once(*, limit: int = 25) -> dict[str, int]:
+    """Process complete 4104 blocks with original-event evidence links."""
+    groups = fetch_pending_script_block_groups(limit=limit)
+    result = {
+        "events_processed": 0,
+        "detections_created": 0,
+        "detections_reused": 0,
+        "alerts_created": 0,
+        "alerts_reused": 0,
+        "incidents_created": 0,
+        "incidents_reused": 0,
+        "events_failed": 0,
+    }
+    for group in groups:
+        if not is_complete_script_block(group):
+            # Never acknowledge a missing, duplicated, or inconsistent part.
+            continue
+        try:
+            candidate = detect_suspicious_script_block(group)
+            if candidate is not None:
+                detection = persist_detection(candidate)
+                result[
+                    "detections_created" if detection.created
+                    else "detections_reused"
+                ] += 1
+                alert = create_alert_for_detection(detection.detection_id)
+                result[
+                    "alerts_created" if alert.created
+                    else "alerts_reused"
+                ] += 1
+                incident = correlate_alert_to_incident(alert.alert_id)
+                result[
+                    "incidents_created" if incident.created
+                    else "incidents_reused"
+                ] += 1
+            for event in group:
+                mark_event_analysis_processed(
+                    UUID(event["event_id"]), SCRIPT_BLOCK_RULE_ID,
+                )
+                result["events_processed"] += 1
+        except Exception as error:
+            result["events_failed"] += 1
+            for event in group:
+                try:
+                    mark_event_analysis_failed(
+                        UUID(event["event_id"]), str(error),
+                        SCRIPT_BLOCK_RULE_ID,
+                    )
+                except Exception as state_error:
+                    print(
+                        f"WIN-011 state update failed: {state_error}",
+                        flush=True,
+                    )
+            print(f"WIN-011 block failed: {error}", flush=True)
+    return result
+
+
+def main() -> None:
+    print(
+        "IntelSOC analysis worker started",
+        flush=True,
+    )
+
+    # New rules will register here with independent runners and state.
+    rules = (
+        RuleRunner(RULE_ID, analyze_once),
+        RuleRunner(SECURITY_LOG_CLEARED_RULE_ID, analyze_security_log_clears_once),
+        RuleRunner(PRIVILEGED_GROUP_RULE_ID, analyze_privileged_group_once),
+        RuleRunner(ACCOUNT_LIFECYCLE_RULE_ID, analyze_account_lifecycle_once),
+        RuleRunner(ACCOUNT_DISABLE_DELETE_RULE_ID, analyze_account_disable_delete_once),
+        RuleRunner(ACCOUNT_LOCKOUT_RULE_ID, analyze_account_lockout_once),
+        RuleRunner(PASSWORD_CHANGE_RULE_ID, analyze_password_change_once),
+        RuleRunner(AUTH_CORRELATION_RULE_ID, analyze_auth_correlation_once),
+        RuleRunner(SCHEDULED_TASK_RULE_ID, analyze_scheduled_tasks_once),
+        RuleRunner(PROCESS_CREATION_RULE_ID, analyze_process_creations_once),
+        RuleRunner(SCRIPT_BLOCK_RULE_ID, analyze_script_blocks_once),
+    )
+
+    while True:
+        for outcome in run_registered_rules(rules):
+            if outcome.error is not None:
+                print(
+                    f"Rule {outcome.rule_id} error: {outcome.error}",
+                    flush=True,
+                )
+            elif outcome.result and (
+                outcome.result["events_processed"] or outcome.result["events_failed"]
+            ):
+                print(
+                    json.dumps({
+                        "rule_id": outcome.rule_id,
+                        **outcome.result,
+                    }),
+                    flush=True,
+                )
+
+        time.sleep(POLL_SECONDS)
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nAnalysis worker stopped")
+
+                           AND (raw_event->'StringInserts'->>1) ~ '^[0-9]+
+                    LIMIT %s
+                )
+                SELECT e.event_id, e.device_id, e.event_time, e.raw_event,
+                       e.block_id
+                FROM eligible e JOIN chosen c
+                  ON e.device_id=c.device_id AND e.block_id=c.block_id
+                ORDER BY e.device_id, e.block_id, e.event_time, e.event_id
+                """,
+                (SCRIPT_BLOCK_RULE_ID, limit),
+            )
+            rows = cursor.fetchall()
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for event_id, device_id, timestamp, raw, block_id in rows:
+        key = (str(device_id), block_id.casefold())
+        groups.setdefault(key, []).append({
+            "event_id": str(event_id),
+            "device_id": str(device_id),
+            "event_time": timestamp,
+            "raw_event": raw,
+        })
+    return list(groups.values())
+
+
+def analyze_script_blocks_once(*, limit: int = 25) -> dict[str, int]:
+    """Process complete 4104 blocks with original-event evidence links."""
+    groups = fetch_pending_script_block_groups(limit=limit)
+    result = {
+        "events_processed": 0,
+        "detections_created": 0,
+        "detections_reused": 0,
+        "alerts_created": 0,
+        "alerts_reused": 0,
+        "incidents_created": 0,
+        "incidents_reused": 0,
+        "events_failed": 0,
+    }
+    for group in groups:
+        if not is_complete_script_block(group):
+            # Never acknowledge a missing, duplicated, or inconsistent part.
+            continue
+        try:
+            candidate = detect_suspicious_script_block(group)
+            if candidate is not None:
+                detection = persist_detection(candidate)
+                result[
+                    "detections_created" if detection.created
+                    else "detections_reused"
+                ] += 1
+                alert = create_alert_for_detection(detection.detection_id)
+                result[
+                    "alerts_created" if alert.created
+                    else "alerts_reused"
+                ] += 1
+                incident = correlate_alert_to_incident(alert.alert_id)
+                result[
+                    "incidents_created" if incident.created
+                    else "incidents_reused"
+                ] += 1
+            for event in group:
+                mark_event_analysis_processed(
+                    UUID(event["event_id"]), SCRIPT_BLOCK_RULE_ID,
+                )
+                result["events_processed"] += 1
+        except Exception as error:
+            result["events_failed"] += 1
+            for event in group:
+                try:
+                    mark_event_analysis_failed(
+                        UUID(event["event_id"]), str(error),
+                        SCRIPT_BLOCK_RULE_ID,
+                    )
+                except Exception as state_error:
+                    print(
+                        f"WIN-011 state update failed: {state_error}",
+                        flush=True,
+                    )
+            print(f"WIN-011 block failed: {error}", flush=True)
+    return result
+
+
+def main() -> None:
+    print(
+        "IntelSOC analysis worker started",
+        flush=True,
+    )
+
+    # New rules will register here with independent runners and state.
+    rules = (
+        RuleRunner(RULE_ID, analyze_once),
+        RuleRunner(SECURITY_LOG_CLEARED_RULE_ID, analyze_security_log_clears_once),
+        RuleRunner(PRIVILEGED_GROUP_RULE_ID, analyze_privileged_group_once),
+        RuleRunner(ACCOUNT_LIFECYCLE_RULE_ID, analyze_account_lifecycle_once),
+        RuleRunner(ACCOUNT_DISABLE_DELETE_RULE_ID, analyze_account_disable_delete_once),
+        RuleRunner(ACCOUNT_LOCKOUT_RULE_ID, analyze_account_lockout_once),
+        RuleRunner(PASSWORD_CHANGE_RULE_ID, analyze_password_change_once),
+        RuleRunner(AUTH_CORRELATION_RULE_ID, analyze_auth_correlation_once),
+        RuleRunner(SCHEDULED_TASK_RULE_ID, analyze_scheduled_tasks_once),
+        RuleRunner(PROCESS_CREATION_RULE_ID, analyze_process_creations_once),
+        RuleRunner(SCRIPT_BLOCK_RULE_ID, analyze_script_blocks_once),
+    )
+
+    while True:
+        for outcome in run_registered_rules(rules):
+            if outcome.error is not None:
+                print(
+                    f"Rule {outcome.rule_id} error: {outcome.error}",
+                    flush=True,
+                )
+            elif outcome.result and (
+                outcome.result["events_processed"] or outcome.result["events_failed"]
+            ):
+                print(
+                    json.dumps({
+                        "rule_id": outcome.rule_id,
+                        **outcome.result,
+                    }),
+                    flush=True,
+                )
+
+        time.sleep(POLL_SECONDS)
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nAnalysis worker stopped")
+
+                       )
+                       AND MIN(
+                           CASE WHEN (raw_event->'StringInserts'->>1)
+                                ~ '^[0-9]+
+                    LIMIT %s
+                )
+                SELECT e.event_id, e.device_id, e.event_time, e.raw_event,
+                       e.block_id
+                FROM eligible e JOIN chosen c
+                  ON e.device_id=c.device_id AND e.block_id=c.block_id
+                ORDER BY e.device_id, e.block_id, e.event_time, e.event_id
+                """,
+                (SCRIPT_BLOCK_RULE_ID, limit),
+            )
+            rows = cursor.fetchall()
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for event_id, device_id, timestamp, raw, block_id in rows:
+        key = (str(device_id), block_id.casefold())
+        groups.setdefault(key, []).append({
+            "event_id": str(event_id),
+            "device_id": str(device_id),
+            "event_time": timestamp,
+            "raw_event": raw,
+        })
+    return list(groups.values())
+
+
+def analyze_script_blocks_once(*, limit: int = 25) -> dict[str, int]:
+    """Process complete 4104 blocks with original-event evidence links."""
+    groups = fetch_pending_script_block_groups(limit=limit)
+    result = {
+        "events_processed": 0,
+        "detections_created": 0,
+        "detections_reused": 0,
+        "alerts_created": 0,
+        "alerts_reused": 0,
+        "incidents_created": 0,
+        "incidents_reused": 0,
+        "events_failed": 0,
+    }
+    for group in groups:
+        if not is_complete_script_block(group):
+            # Never acknowledge a missing, duplicated, or inconsistent part.
+            continue
+        try:
+            candidate = detect_suspicious_script_block(group)
+            if candidate is not None:
+                detection = persist_detection(candidate)
+                result[
+                    "detections_created" if detection.created
+                    else "detections_reused"
+                ] += 1
+                alert = create_alert_for_detection(detection.detection_id)
+                result[
+                    "alerts_created" if alert.created
+                    else "alerts_reused"
+                ] += 1
+                incident = correlate_alert_to_incident(alert.alert_id)
+                result[
+                    "incidents_created" if incident.created
+                    else "incidents_reused"
+                ] += 1
+            for event in group:
+                mark_event_analysis_processed(
+                    UUID(event["event_id"]), SCRIPT_BLOCK_RULE_ID,
+                )
+                result["events_processed"] += 1
+        except Exception as error:
+            result["events_failed"] += 1
+            for event in group:
+                try:
+                    mark_event_analysis_failed(
+                        UUID(event["event_id"]), str(error),
+                        SCRIPT_BLOCK_RULE_ID,
+                    )
+                except Exception as state_error:
+                    print(
+                        f"WIN-011 state update failed: {state_error}",
+                        flush=True,
+                    )
+            print(f"WIN-011 block failed: {error}", flush=True)
+    return result
+
+
+def main() -> None:
+    print(
+        "IntelSOC analysis worker started",
+        flush=True,
+    )
+
+    # New rules will register here with independent runners and state.
+    rules = (
+        RuleRunner(RULE_ID, analyze_once),
+        RuleRunner(SECURITY_LOG_CLEARED_RULE_ID, analyze_security_log_clears_once),
+        RuleRunner(PRIVILEGED_GROUP_RULE_ID, analyze_privileged_group_once),
+        RuleRunner(ACCOUNT_LIFECYCLE_RULE_ID, analyze_account_lifecycle_once),
+        RuleRunner(ACCOUNT_DISABLE_DELETE_RULE_ID, analyze_account_disable_delete_once),
+        RuleRunner(ACCOUNT_LOCKOUT_RULE_ID, analyze_account_lockout_once),
+        RuleRunner(PASSWORD_CHANGE_RULE_ID, analyze_password_change_once),
+        RuleRunner(AUTH_CORRELATION_RULE_ID, analyze_auth_correlation_once),
+        RuleRunner(SCHEDULED_TASK_RULE_ID, analyze_scheduled_tasks_once),
+        RuleRunner(PROCESS_CREATION_RULE_ID, analyze_process_creations_once),
+        RuleRunner(SCRIPT_BLOCK_RULE_ID, analyze_script_blocks_once),
+    )
+
+    while True:
+        for outcome in run_registered_rules(rules):
+            if outcome.error is not None:
+                print(
+                    f"Rule {outcome.rule_id} error: {outcome.error}",
+                    flush=True,
+                )
+            elif outcome.result and (
+                outcome.result["events_processed"] or outcome.result["events_failed"]
+            ):
+                print(
+                    json.dumps({
+                        "rule_id": outcome.rule_id,
+                        **outcome.result,
+                    }),
+                    flush=True,
+                )
+
+        time.sleep(POLL_SECONDS)
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nAnalysis worker stopped")
+
+                                THEN (raw_event->'StringInserts'->>1)::integer
+                           END
+                       ) = MAX(
+                           CASE WHEN (raw_event->'StringInserts'->>1)
+                                ~ '^[0-9]+
+                    LIMIT %s
+                )
+                SELECT e.event_id, e.device_id, e.event_time, e.raw_event,
+                       e.block_id
+                FROM eligible e JOIN chosen c
+                  ON e.device_id=c.device_id AND e.block_id=c.block_id
+                ORDER BY e.device_id, e.block_id, e.event_time, e.event_id
+                """,
+                (SCRIPT_BLOCK_RULE_ID, limit),
+            )
+            rows = cursor.fetchall()
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for event_id, device_id, timestamp, raw, block_id in rows:
+        key = (str(device_id), block_id.casefold())
+        groups.setdefault(key, []).append({
+            "event_id": str(event_id),
+            "device_id": str(device_id),
+            "event_time": timestamp,
+            "raw_event": raw,
+        })
+    return list(groups.values())
+
+
+def analyze_script_blocks_once(*, limit: int = 25) -> dict[str, int]:
+    """Process complete 4104 blocks with original-event evidence links."""
+    groups = fetch_pending_script_block_groups(limit=limit)
+    result = {
+        "events_processed": 0,
+        "detections_created": 0,
+        "detections_reused": 0,
+        "alerts_created": 0,
+        "alerts_reused": 0,
+        "incidents_created": 0,
+        "incidents_reused": 0,
+        "events_failed": 0,
+    }
+    for group in groups:
+        if not is_complete_script_block(group):
+            # Never acknowledge a missing, duplicated, or inconsistent part.
+            continue
+        try:
+            candidate = detect_suspicious_script_block(group)
+            if candidate is not None:
+                detection = persist_detection(candidate)
+                result[
+                    "detections_created" if detection.created
+                    else "detections_reused"
+                ] += 1
+                alert = create_alert_for_detection(detection.detection_id)
+                result[
+                    "alerts_created" if alert.created
+                    else "alerts_reused"
+                ] += 1
+                incident = correlate_alert_to_incident(alert.alert_id)
+                result[
+                    "incidents_created" if incident.created
+                    else "incidents_reused"
+                ] += 1
+            for event in group:
+                mark_event_analysis_processed(
+                    UUID(event["event_id"]), SCRIPT_BLOCK_RULE_ID,
+                )
+                result["events_processed"] += 1
+        except Exception as error:
+            result["events_failed"] += 1
+            for event in group:
+                try:
+                    mark_event_analysis_failed(
+                        UUID(event["event_id"]), str(error),
+                        SCRIPT_BLOCK_RULE_ID,
+                    )
+                except Exception as state_error:
+                    print(
+                        f"WIN-011 state update failed: {state_error}",
+                        flush=True,
+                    )
+            print(f"WIN-011 block failed: {error}", flush=True)
+    return result
+
+
+def main() -> None:
+    print(
+        "IntelSOC analysis worker started",
+        flush=True,
+    )
+
+    # New rules will register here with independent runners and state.
+    rules = (
+        RuleRunner(RULE_ID, analyze_once),
+        RuleRunner(SECURITY_LOG_CLEARED_RULE_ID, analyze_security_log_clears_once),
+        RuleRunner(PRIVILEGED_GROUP_RULE_ID, analyze_privileged_group_once),
+        RuleRunner(ACCOUNT_LIFECYCLE_RULE_ID, analyze_account_lifecycle_once),
+        RuleRunner(ACCOUNT_DISABLE_DELETE_RULE_ID, analyze_account_disable_delete_once),
+        RuleRunner(ACCOUNT_LOCKOUT_RULE_ID, analyze_account_lockout_once),
+        RuleRunner(PASSWORD_CHANGE_RULE_ID, analyze_password_change_once),
+        RuleRunner(AUTH_CORRELATION_RULE_ID, analyze_auth_correlation_once),
+        RuleRunner(SCHEDULED_TASK_RULE_ID, analyze_scheduled_tasks_once),
+        RuleRunner(PROCESS_CREATION_RULE_ID, analyze_process_creations_once),
+        RuleRunner(SCRIPT_BLOCK_RULE_ID, analyze_script_blocks_once),
+    )
+
+    while True:
+        for outcome in run_registered_rules(rules):
+            if outcome.error is not None:
+                print(
+                    f"Rule {outcome.rule_id} error: {outcome.error}",
+                    flush=True,
+                )
+            elif outcome.result and (
+                outcome.result["events_processed"] or outcome.result["events_failed"]
+            ):
+                print(
+                    json.dumps({
+                        "rule_id": outcome.rule_id,
+                        **outcome.result,
+                    }),
+                    flush=True,
+                )
+
+        time.sleep(POLL_SECONDS)
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nAnalysis worker stopped")
+
+                                THEN (raw_event->'StringInserts'->>1)::integer
+                           END
+                       )
+                       AND COUNT(*) = MAX(
+                           CASE WHEN (raw_event->'StringInserts'->>1)
+                                ~ '^[0-9]+
+                    LIMIT %s
+                )
+                SELECT e.event_id, e.device_id, e.event_time, e.raw_event,
+                       e.block_id
+                FROM eligible e JOIN chosen c
+                  ON e.device_id=c.device_id AND e.block_id=c.block_id
+                ORDER BY e.device_id, e.block_id, e.event_time, e.event_id
+                """,
+                (SCRIPT_BLOCK_RULE_ID, limit),
+            )
+            rows = cursor.fetchall()
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for event_id, device_id, timestamp, raw, block_id in rows:
+        key = (str(device_id), block_id.casefold())
+        groups.setdefault(key, []).append({
+            "event_id": str(event_id),
+            "device_id": str(device_id),
+            "event_time": timestamp,
+            "raw_event": raw,
+        })
+    return list(groups.values())
+
+
+def analyze_script_blocks_once(*, limit: int = 25) -> dict[str, int]:
+    """Process complete 4104 blocks with original-event evidence links."""
+    groups = fetch_pending_script_block_groups(limit=limit)
+    result = {
+        "events_processed": 0,
+        "detections_created": 0,
+        "detections_reused": 0,
+        "alerts_created": 0,
+        "alerts_reused": 0,
+        "incidents_created": 0,
+        "incidents_reused": 0,
+        "events_failed": 0,
+    }
+    for group in groups:
+        if not is_complete_script_block(group):
+            # Never acknowledge a missing, duplicated, or inconsistent part.
+            continue
+        try:
+            candidate = detect_suspicious_script_block(group)
+            if candidate is not None:
+                detection = persist_detection(candidate)
+                result[
+                    "detections_created" if detection.created
+                    else "detections_reused"
+                ] += 1
+                alert = create_alert_for_detection(detection.detection_id)
+                result[
+                    "alerts_created" if alert.created
+                    else "alerts_reused"
+                ] += 1
+                incident = correlate_alert_to_incident(alert.alert_id)
+                result[
+                    "incidents_created" if incident.created
+                    else "incidents_reused"
+                ] += 1
+            for event in group:
+                mark_event_analysis_processed(
+                    UUID(event["event_id"]), SCRIPT_BLOCK_RULE_ID,
+                )
+                result["events_processed"] += 1
+        except Exception as error:
+            result["events_failed"] += 1
+            for event in group:
+                try:
+                    mark_event_analysis_failed(
+                        UUID(event["event_id"]), str(error),
+                        SCRIPT_BLOCK_RULE_ID,
+                    )
+                except Exception as state_error:
+                    print(
+                        f"WIN-011 state update failed: {state_error}",
+                        flush=True,
+                    )
+            print(f"WIN-011 block failed: {error}", flush=True)
+    return result
+
+
+def main() -> None:
+    print(
+        "IntelSOC analysis worker started",
+        flush=True,
+    )
+
+    # New rules will register here with independent runners and state.
+    rules = (
+        RuleRunner(RULE_ID, analyze_once),
+        RuleRunner(SECURITY_LOG_CLEARED_RULE_ID, analyze_security_log_clears_once),
+        RuleRunner(PRIVILEGED_GROUP_RULE_ID, analyze_privileged_group_once),
+        RuleRunner(ACCOUNT_LIFECYCLE_RULE_ID, analyze_account_lifecycle_once),
+        RuleRunner(ACCOUNT_DISABLE_DELETE_RULE_ID, analyze_account_disable_delete_once),
+        RuleRunner(ACCOUNT_LOCKOUT_RULE_ID, analyze_account_lockout_once),
+        RuleRunner(PASSWORD_CHANGE_RULE_ID, analyze_password_change_once),
+        RuleRunner(AUTH_CORRELATION_RULE_ID, analyze_auth_correlation_once),
+        RuleRunner(SCHEDULED_TASK_RULE_ID, analyze_scheduled_tasks_once),
+        RuleRunner(PROCESS_CREATION_RULE_ID, analyze_process_creations_once),
+        RuleRunner(SCRIPT_BLOCK_RULE_ID, analyze_script_blocks_once),
+    )
+
+    while True:
+        for outcome in run_registered_rules(rules):
+            if outcome.error is not None:
+                print(
+                    f"Rule {outcome.rule_id} error: {outcome.error}",
+                    flush=True,
+                )
+            elif outcome.result and (
+                outcome.result["events_processed"] or outcome.result["events_failed"]
+            ):
+                print(
+                    json.dumps({
+                        "rule_id": outcome.rule_id,
+                        **outcome.result,
+                    }),
+                    flush=True,
+                )
+
+        time.sleep(POLL_SECONDS)
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nAnalysis worker stopped")
+
+                                THEN (raw_event->'StringInserts'->>1)::integer
+                           END
+                       )
+                       AND COUNT(DISTINCT (
+                           raw_event->'StringInserts'->>0
+                       )) = COUNT(*)
                     ORDER BY first_seen, device_id, block_id
                     LIMIT %s
                 )
