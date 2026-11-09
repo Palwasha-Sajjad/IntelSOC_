@@ -1,0 +1,270 @@
+import json
+import time
+from datetime import timedelta
+from pathlib import Path
+from typing import Any
+from uuid import UUID
+
+import psycopg
+from dotenv import load_dotenv
+
+from app.analysis.failed_login_rule import (
+    DEFAULT_WINDOW,
+    evaluate_repeated_failed_logins,
+)
+from app.core.config import get_postgres_config
+from app.services.detection_service import (
+    mark_event_analysis_failed,
+    mark_event_analysis_processed,
+    persist_detection,
+)
+
+
+ROOT = Path(__file__).resolve().parents[3]
+load_dotenv(ROOT / ".env")
+
+POLL_SECONDS = 1.0
+BATCH_SIZE = 100
+
+
+def fetch_unprocessed_failed_login_events(
+    *,
+    limit: int = BATCH_SIZE,
+) -> list[dict[str, Any]]:
+    """
+    Return Windows EventID 4625 rows that have not been processed yet.
+
+    Provider/channel validation remains the extractor's responsibility.
+    Failed rows are eligible for retry; successfully processed rows are not.
+    """
+
+    with psycopg.connect(
+        **get_postgres_config(),
+        connect_timeout=5,
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    e.event_id,
+                    e.device_id,
+                    e.event_time,
+                    e.raw_event
+                FROM security_events AS e
+                LEFT JOIN event_analysis_state AS s
+                  ON s.event_id = e.event_id
+                WHERE e.source = 'windows_eventlog'
+                  AND e.raw_event->>'EventID' = '4625'
+                  AND (
+                        s.event_id IS NULL
+                        OR s.status = 'failed'
+                  )
+                ORDER BY e.event_time ASC, e.event_id ASC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+
+            rows = cursor.fetchall()
+
+    return [
+        {
+            "event_id": str(event_id),
+            "device_id": (
+                str(device_id)
+                if device_id is not None
+                else ""
+            ),
+            "event_time": event_time,
+            "raw_event": raw_event,
+        }
+        for event_id, device_id, event_time, raw_event in rows
+    ]
+
+
+def fetch_failed_login_history(
+    *,
+    start_time,
+    end_time,
+) -> list[dict[str, Any]]:
+    """
+    Return the bounded 4625 history needed for rolling-window evaluation.
+
+    This includes already-processed evidence so a later polling cycle can
+    understand whether the threshold was already crossed.
+    """
+
+    lookback_start = start_time - DEFAULT_WINDOW
+
+    with psycopg.connect(
+        **get_postgres_config(),
+        connect_timeout=5,
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    event_id,
+                    device_id,
+                    event_time,
+                    raw_event
+                FROM security_events
+                WHERE source = 'windows_eventlog'
+                  AND raw_event->>'EventID' = '4625'
+                  AND event_time >= %s
+                  AND event_time <= %s
+                ORDER BY event_time ASC, event_id ASC
+                """,
+                (
+                    lookback_start,
+                    end_time,
+                ),
+            )
+
+            rows = cursor.fetchall()
+
+    return [
+        {
+            "event_id": str(event_id),
+            "device_id": (
+                str(device_id)
+                if device_id is not None
+                else ""
+            ),
+            "event_time": event_time,
+            "raw_event": raw_event,
+        }
+        for event_id, device_id, event_time, raw_event in rows
+    ]
+
+
+def analyze_once(
+    *,
+    limit: int = BATCH_SIZE,
+) -> dict[str, int]:
+    """
+    Analyze one bounded batch of stored Windows failed-login candidates.
+
+    Detections are persisted only when their threshold-crossing event belongs
+    to the current unprocessed batch. Historical lookback is context only.
+    """
+
+    pending = fetch_unprocessed_failed_login_events(
+        limit=limit,
+    )
+
+    if not pending:
+        return {
+            "events_processed": 0,
+            "detections_created": 0,
+            "detections_reused": 0,
+            "events_failed": 0,
+        }
+
+    batch_event_ids = {
+        event["event_id"]
+        for event in pending
+    }
+
+    start_time = min(
+        event["event_time"]
+        for event in pending
+    )
+    end_time = max(
+        event["event_time"]
+        for event in pending
+    )
+
+    try:
+        history = fetch_failed_login_history(
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+        candidates = evaluate_repeated_failed_logins(
+            history
+        )
+
+        created = 0
+        reused = 0
+
+        for candidate in candidates:
+            # Only persist a detection whose threshold-crossing event is
+            # part of this batch. Earlier detections are historical context.
+            if (
+                not candidate.event_ids
+                or candidate.event_ids[-1]
+                not in batch_event_ids
+            ):
+                continue
+
+            result = persist_detection(candidate)
+
+            if result.created:
+                created += 1
+            else:
+                reused += 1
+
+        for event in pending:
+            mark_event_analysis_processed(
+                UUID(event["event_id"])
+            )
+
+        return {
+            "events_processed": len(pending),
+            "detections_created": created,
+            "detections_reused": reused,
+            "events_failed": 0,
+        }
+
+    except Exception as error:
+        for event in pending:
+            try:
+                mark_event_analysis_failed(
+                    UUID(event["event_id"]),
+                    str(error),
+                )
+            except Exception:
+                # Preserve the original analysis failure. A later cycle can
+                # retry rows whose state was not updated.
+                pass
+
+        raise
+
+
+def main() -> None:
+    print(
+        "IntelSOC analysis worker started",
+        flush=True,
+    )
+
+    while True:
+        try:
+            result = analyze_once()
+
+            if result["events_processed"]:
+                print(
+                    json.dumps(result),
+                    flush=True,
+                )
+
+        except psycopg.Error as error:
+            print(
+                f"Analysis database error: {error}",
+                flush=True,
+            )
+
+        except Exception as error:
+            print(
+                f"Analysis error: {error}",
+                flush=True,
+            )
+
+        time.sleep(POLL_SECONDS)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nAnalysis worker stopped")
