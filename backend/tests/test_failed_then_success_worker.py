@@ -140,3 +140,19 @@ def test_worker_failure_isolated_and_retryable(monkeypatch):
     assert failures == [
         (UUID(success["event_id"]), "db unavailable", "RULE-WIN-008")
     ]
+
+
+def test_same_timestamp_preceding_success_suppresses_replay(monkeypatch):
+    """A prior same-time 4624 consumes the five failures."""
+    history = [event(4625, i * 20) for i in range(5)]
+    earlier_success = event(4624, 110)
+    later_success = event(4624, 110)
+    wire(monkeypatch, [later_success], history + [earlier_success])
+    monkeypatch.setattr(
+        worker, "mark_event_analysis_processed",
+        lambda event_id, rule_id: None,
+    )
+    result = worker.analyze_auth_correlation_once()
+    assert result["events_processed"] == 1
+    assert result["detections_created"] == 0
+    assert result["alerts_created"] == 0
