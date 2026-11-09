@@ -14,6 +14,10 @@ from app.analysis.failed_login_rule import (
     evaluate_repeated_failed_logins,
 )
 from app.analysis.rule_dispatcher import RuleRunner, run_registered_rules
+from app.analysis.security_log_cleared_rule import (
+    RULE_ID as SECURITY_LOG_CLEARED_RULE_ID,
+    detect_security_log_cleared,
+)
 from app.core.config import get_postgres_config
 from app.services.alert_service import (
     create_alert_for_detection,
@@ -282,6 +286,103 @@ def analyze_once(
         raise
 
 
+
+def fetch_unprocessed_security_log_clears(
+    *, limit: int = BATCH_SIZE,
+) -> list[dict[str, Any]]:
+    """Fetch only registered-device, genuine-shaped Windows 1102 records."""
+    with psycopg.connect(
+        **get_postgres_config(), connect_timeout=5,
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT e.event_id, e.device_id, e.event_time, e.raw_event
+                FROM security_events AS e
+                LEFT JOIN event_rule_analysis_state AS s
+                  ON s.event_id = e.event_id AND s.rule_id = %s
+                WHERE e.source = 'windows_eventlog'
+                  AND e.event_type = 'windows_security_event'
+                  AND e.device_id IS NOT NULL
+                  AND e.raw_event->>'EventID' = '1102'
+                  AND lower(e.raw_event->>'Channel') = 'security'
+                  AND lower(e.raw_event->>'ProviderName') =
+                      'microsoft-windows-eventlog'
+                  AND (s.event_id IS NULL OR s.status = 'failed')
+                ORDER BY e.event_time ASC, e.event_id ASC
+                LIMIT %s
+                """,
+                (SECURITY_LOG_CLEARED_RULE_ID, limit),
+            )
+            rows = cursor.fetchall()
+    return [
+        {
+            "event_id": str(event_id),
+            "device_id": str(device_id),
+            "event_time": event_time,
+            "raw_event": raw_event,
+        }
+        for event_id, device_id, event_time, raw_event in rows
+    ]
+
+
+def analyze_security_log_clears_once(
+    *, limit: int = BATCH_SIZE,
+) -> dict[str, int]:
+    """Persist and individually acknowledge 1102 detections.
+
+    Failures affect only WIN-002 per-rule state, never WIN-001.
+    """
+    pending = fetch_unprocessed_security_log_clears(limit=limit)
+    result = {
+        "events_processed": 0,
+        "detections_created": 0,
+        "detections_reused": 0,
+        "alerts_created": 0,
+        "alerts_reused": 0,
+        "incidents_created": 0,
+        "incidents_reused": 0,
+        "events_failed": 0,
+    }
+    for event in pending:
+        event_id = UUID(event["event_id"])
+        try:
+            candidate = detect_security_log_cleared(event)
+            if candidate is not None:
+                detection = persist_detection(candidate)
+                result[
+                    "detections_created" if detection.created
+                    else "detections_reused"
+                ] += 1
+                alert = create_alert_for_detection(detection.detection_id)
+                result[
+                    "alerts_created" if alert.created else "alerts_reused"
+                ] += 1
+                incident = correlate_alert_to_incident(alert.alert_id)
+                result[
+                    "incidents_created" if incident.created
+                    else "incidents_reused"
+                ] += 1
+
+            mark_event_analysis_processed(
+                event_id, SECURITY_LOG_CLEARED_RULE_ID,
+            )
+            result["events_processed"] += 1
+        except Exception as error:
+            result["events_failed"] += 1
+            try:
+                mark_event_analysis_failed(
+                    event_id, str(error), SECURITY_LOG_CLEARED_RULE_ID,
+                )
+            except Exception as state_error:
+                print(
+                    f"WIN-002 state update failed: {state_error}",
+                    flush=True,
+                )
+            print(f"WIN-002 event failed: {error}", flush=True)
+    return result
+
+
 def main() -> None:
     print(
         "IntelSOC analysis worker started",
@@ -289,7 +390,10 @@ def main() -> None:
     )
 
     # New rules will register here with independent runners and state.
-    rules = (RuleRunner(RULE_ID, analyze_once),)
+    rules = (
+        RuleRunner(RULE_ID, analyze_once),
+        RuleRunner(SECURITY_LOG_CLEARED_RULE_ID, analyze_security_log_clears_once),
+    )
 
     while True:
         for outcome in run_registered_rules(rules):
@@ -298,7 +402,9 @@ def main() -> None:
                     f"Rule {outcome.rule_id} error: {outcome.error}",
                     flush=True,
                 )
-            elif outcome.result and outcome.result["events_processed"]:
+            elif outcome.result and (
+                outcome.result["events_processed"] or outcome.result["events_failed"]
+            ):
                 print(
                     json.dumps({
                         "rule_id": outcome.rule_id,
