@@ -168,8 +168,9 @@ def persist_detection(
 
 def mark_event_analysis_processed(
     event_id: UUID | str,
+    rule_id: str = "RULE-WIN-001",
 ) -> None:
-    """Mark one stored event as successfully analyzed."""
+    """Mark one event complete for one rule, without affecting other rules."""
 
     with psycopg.connect(
         **get_postgres_config(),
@@ -178,31 +179,33 @@ def mark_event_analysis_processed(
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                INSERT INTO event_analysis_state (
+                INSERT INTO event_rule_analysis_state (
                     event_id,
+                    rule_id,
                     status,
                     attempts,
                     processed_at,
                     updated_at
                 )
-                VALUES (%s, 'processed', 1, NOW(), NOW())
-                ON CONFLICT (event_id)
+                VALUES (%s, %s, 'processed', 1, NOW(), NOW())
+                ON CONFLICT (event_id, rule_id)
                 DO UPDATE SET
                     status = 'processed',
-                    attempts = event_analysis_state.attempts + 1,
+                    attempts = event_rule_analysis_state.attempts + 1,
                     last_error = NULL,
                     processed_at = NOW(),
                     updated_at = NOW()
                 """,
-                (event_id,),
+                (event_id, rule_id),
             )
 
 
 def mark_event_analysis_failed(
     event_id: UUID | str,
     error: str,
+    rule_id: str = "RULE-WIN-001",
 ) -> None:
-    """Record a failed analysis attempt without losing retry history."""
+    """Record a failed attempt for one rule without affecting other rules."""
 
     error = str(error).strip()[:4000]
 
@@ -213,23 +216,25 @@ def mark_event_analysis_failed(
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                INSERT INTO event_analysis_state (
+                INSERT INTO event_rule_analysis_state (
                     event_id,
+                    rule_id,
                     status,
                     attempts,
                     last_error,
                     updated_at
                 )
-                VALUES (%s, 'failed', 1, %s, NOW())
-                ON CONFLICT (event_id)
+                VALUES (%s, %s, 'failed', 1, %s, NOW())
+                ON CONFLICT (event_id, rule_id)
                 DO UPDATE SET
                     status = 'failed',
-                    attempts = event_analysis_state.attempts + 1,
+                    attempts = event_rule_analysis_state.attempts + 1,
                     last_error = EXCLUDED.last_error,
                     updated_at = NOW()
                 """,
                 (
                     event_id,
+                    rule_id,
                     error,
                 ),
             )
