@@ -283,3 +283,52 @@ def test_update_incident_status_rejects_unknown_state():
             uuid4(),
             "deleted",
         )
+
+
+def test_win002_incident_is_isolated_even_with_shared_user(monkeypatch):
+    alert_id = uuid4()
+    cursor = MagicMock()
+    existing = alert_row(alert_id=alert_id)
+    win002_row = (
+        alert_id, "RULE-WIN-002", "Windows Security Audit Log Cleared",
+        "high", existing[4], existing[5], None, NOW,
+    )
+    cursor.fetchone.side_effect = [None, win002_row, None, (alert_id,)]
+    monkeypatch.setattr(
+        incident_service.psycopg, "connect",
+        lambda **kwargs: connection_with_cursor(cursor),
+    )
+    incident_service.correlate_alert_to_incident(alert_id)
+    lookup = [
+        call for call in cursor.execute.call_args_list
+        if "FROM incidents" in call.args[0]
+    ]
+    assert len(lookup) == 1
+    import hashlib
+    expected = hashlib.sha256(
+        f"isolated|RULE-WIN-002|{alert_id}".encode("utf-8")
+    ).hexdigest()
+    assert lookup[0].args[1][0] == expected
+
+
+def test_no_user_no_source_alert_is_not_grouped_by_device_only(monkeypatch):
+    alert_id = uuid4()
+    cursor = MagicMock()
+    existing = alert_row(alert_id=alert_id)
+    unknown_row = (
+        alert_id, "RULE-LIN-006", "Suspicious Execution",
+        "medium", existing[4], None, None, NOW,
+    )
+    cursor.fetchone.side_effect = [None, unknown_row, None, (alert_id,)]
+    monkeypatch.setattr(
+        incident_service.psycopg, "connect",
+        lambda **kwargs: connection_with_cursor(cursor),
+    )
+    incident_service.correlate_alert_to_incident(alert_id)
+    lookup = [
+        call for call in cursor.execute.call_args_list
+        if "FROM incidents" in call.args[0]
+    ]
+    assert lookup[0].args[1][0] != incident_service.build_incident_correlation_key(
+        device_id=existing[4], target_user=None, source_ip=None,
+    )
