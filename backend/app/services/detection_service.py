@@ -33,6 +33,8 @@ def _validate_candidate(candidate: DetectionCandidateLike) -> None:
         or not candidate.rule_id.strip()
         or not candidate.rule_name
         or not candidate.rule_name.strip()
+        or not candidate.device_id
+        or not str(candidate.device_id).strip()
         or not candidate.grouping_basis
         or not candidate.grouping_basis.strip()
     ):
