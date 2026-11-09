@@ -82,6 +82,8 @@ def _success(event: Mapping[str, Any]) -> tuple[str, int, str | None] | None:
     address = _ip(inserts[18])
     if logon_type in REMOTE_LOGON_TYPES and address is None:
         return None
+    if logon_type in LOCAL_LOGON_TYPES and address is not None:
+        return None
     return identity, logon_type, address if logon_type in REMOTE_LOGON_TYPES else None
 
 
@@ -97,6 +99,8 @@ def _failure(event: Mapping[str, Any]) -> tuple[str, int, str | None] | None:
         return None
     address = _ip(evidence.source_ip)
     if logon_type in REMOTE_LOGON_TYPES and address is None:
+        return None
+    if logon_type in LOCAL_LOGON_TYPES and address is not None:
         return None
     return identity, logon_type, address if logon_type in REMOTE_LOGON_TYPES else None
 
@@ -146,7 +150,7 @@ def correlate_failed_then_successful_logins(
         if not is_success:
             queue.append((dt, stored_id))
             continue
-        if len(queue) < threshold:
+        if len(queue) < threshold or queue[-1][0] >= dt:
             continue
 
         # Earliest complete burst in the window, plus the success record.
