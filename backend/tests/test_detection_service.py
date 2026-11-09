@@ -1,10 +1,14 @@
 from datetime import datetime, timezone
+from dataclasses import replace
+
+import pytest
 from unittest.mock import MagicMock
 from uuid import UUID, uuid4
 
 from app.analysis.failed_login_rule import (
     FailedLoginDetectionCandidate,
 )
+from app.analysis.detection_candidate import DetectionCandidate
 from app.services import detection_service
 
 
@@ -218,3 +222,85 @@ def test_per_rule_failure_is_scoped(monkeypatch):
     sql, params = cursor.execute.call_args.args
     assert "ON CONFLICT (event_id, rule_id)" in sql
     assert params == (event_id, "RULE-LIN-001", "simulated error")
+
+
+def general_candidate():
+    old = candidate()
+    return DetectionCandidate(
+        rule_id="RULE-WIN-002",
+        rule_name="Security Log Cleared",
+        severity="high",
+        device_id=old.device_id,
+        grouping_basis="device_event",
+        event_ids=(old.event_ids[0],),
+        event_count=1,
+        window_start=old.window_start,
+        window_end=old.window_start,
+    )
+
+
+def test_generic_candidate_with_missing_user_and_ip_persists(monkeypatch):
+    item = general_candidate()
+    cursor = MagicMock()
+    detection_id = uuid4()
+    cursor.fetchone.return_value = (detection_id,)
+    monkeypatch.setattr(
+        detection_service.psycopg,
+        "connect",
+        lambda **kwargs: connection_with_cursor(cursor),
+    )
+
+    result = detection_service.persist_detection(item)
+
+    assert result.created is True
+    assert result.detection_id == detection_id
+    sql, params = cursor.execute.call_args_list[0].args
+    assert "INSERT INTO detections" in sql
+    assert params[6] is None  # no invented target user
+    assert params[7] is None  # no invented source IP
+    assert params[8] is None  # no invented logon type
+    assert params[9] == "device_event"
+    assert len([call for call in cursor.execute.call_args_list
+                if "INSERT INTO detection_events" in call.args[0]]) == 1
+
+
+def test_generic_candidate_fingerprint_stable_and_rule_scoped():
+    item = general_candidate()
+    fp = detection_service.build_detection_fingerprint(item)
+    assert fp == detection_service.build_detection_fingerprint(item)
+    assert fp != detection_service.build_detection_fingerprint(
+        replace(item, rule_id="RULE-WIN-003")
+    )
+
+
+@pytest.mark.parametrize("changes", [
+    {"event_ids": ()},
+    {"event_ids": ("same", "same"), "event_count": 2},
+    {"event_count": 2},
+    {"severity": "unknown"},
+    {"rule_id": ""},
+    {"window_end": datetime(2026, 11, 9, 5, 49, tzinfo=timezone.utc)},
+    {"window_start": datetime(2026, 11, 9, 5, 50)},
+])
+def test_invalid_generic_candidate_rejected_before_database(changes, monkeypatch):
+    monkeypatch.setattr(
+        detection_service.psycopg, "connect",
+        lambda **kwargs: pytest.fail("Database must not be contacted"),
+    )
+    with pytest.raises(ValueError):
+        detection_service.persist_detection(replace(general_candidate(), **changes))
+
+
+def test_win001_fingerprint_matches_previous_algorithm():
+    import hashlib
+    item = candidate()
+    material = "|".join((
+        item.rule_id, item.device_id,
+        item.target_user.casefold(), item.source_ip or "",
+        str(item.logon_type or ""), item.grouping_basis,
+        item.window_start.isoformat(), item.window_end.isoformat(),
+        "|".join(sorted(item.event_ids)),
+    ))
+    assert detection_service.build_detection_fingerprint(item) == (
+        hashlib.sha256(material.encode("utf-8")).hexdigest()
+    )
