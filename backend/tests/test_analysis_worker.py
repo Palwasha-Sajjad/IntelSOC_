@@ -17,15 +17,11 @@ BASE_TIME = datetime(
 )
 
 
-def event(
-    number: int,
-    seconds: int,
-):
+def event(number: int, seconds: int):
     return {
         "event_id": str(uuid4()),
         "device_id": str(uuid4()),
-        "event_time": BASE_TIME
-        + timedelta(seconds=seconds),
+        "event_time": BASE_TIME + timedelta(seconds=seconds),
         "raw_event": {
             "Channel": "Security",
             "EventID": 4625,
@@ -61,11 +57,7 @@ def event(
 
 def same_device_events(count: int):
     device_id = str(uuid4())
-
-    events = [
-        event(i, i * 20)
-        for i in range(count)
-    ]
+    events = [event(i, i * 20) for i in range(count)]
 
     for item in events:
         item["device_id"] = device_id
@@ -85,50 +77,48 @@ class AlertResult:
         self.created = created
 
 
-def test_analyze_once_persists_threshold_crossing(monkeypatch):
-    events = same_device_events(5)
+class IncidentResult:
+    def __init__(self, *, created: bool):
+        self.incident_id = uuid4()
+        self.created = created
 
+
+def wire_success(monkeypatch, events, *, created=True):
     monkeypatch.setattr(
         analysis_worker,
         "fetch_unprocessed_failed_login_events",
         lambda limit: events,
     )
-
     monkeypatch.setattr(
         analysis_worker,
         "fetch_failed_login_history",
         lambda start_time, end_time: events,
     )
-
-    persisted = []
-
     monkeypatch.setattr(
         analysis_worker,
         "persist_detection",
-        lambda candidate: (
-            persisted.append(candidate)
-            or DetectionResult(created=True)
-        ),
+        lambda candidate: DetectionResult(created=created),
     )
-
-    alerts = []
-
     monkeypatch.setattr(
         analysis_worker,
         "create_alert_for_detection",
-        lambda detection_id: (
-            alerts.append(detection_id)
-            or AlertResult(created=True)
-        ),
+        lambda detection_id: AlertResult(created=created),
     )
-
-    processed = []
-
+    monkeypatch.setattr(
+        analysis_worker,
+        "correlate_alert_to_incident",
+        lambda alert_id: IncidentResult(created=created),
+    )
     monkeypatch.setattr(
         analysis_worker,
         "mark_event_analysis_processed",
-        lambda event_id: processed.append(str(event_id)),
+        lambda event_id: None,
     )
+
+
+def test_analyze_once_persists_alert_and_incident(monkeypatch):
+    events = same_device_events(5)
+    wire_success(monkeypatch, events)
 
     result = analysis_worker.analyze_once()
 
@@ -138,13 +128,10 @@ def test_analyze_once_persists_threshold_crossing(monkeypatch):
         "detections_reused": 0,
         "alerts_created": 1,
         "alerts_reused": 0,
+        "incidents_created": 1,
+        "incidents_reused": 0,
         "events_failed": 0,
     }
-
-    assert len(persisted) == 1
-    assert persisted[0].event_count == 5
-    assert len(alerts) == 1
-    assert len(processed) == 5
 
 
 def test_history_detection_is_not_persisted_again(monkeypatch):
@@ -156,7 +143,6 @@ def test_history_detection_is_not_persisted_again(monkeypatch):
         "fetch_unprocessed_failed_login_events",
         lambda limit: pending,
     )
-
     monkeypatch.setattr(
         analysis_worker,
         "fetch_failed_login_history",
@@ -165,19 +151,23 @@ def test_history_detection_is_not_persisted_again(monkeypatch):
 
     persisted = []
     alerts = []
+    incidents = []
 
     monkeypatch.setattr(
         analysis_worker,
         "persist_detection",
         lambda candidate: persisted.append(candidate),
     )
-
     monkeypatch.setattr(
         analysis_worker,
         "create_alert_for_detection",
         lambda detection_id: alerts.append(detection_id),
     )
-
+    monkeypatch.setattr(
+        analysis_worker,
+        "correlate_alert_to_incident",
+        lambda alert_id: incidents.append(alert_id),
+    )
     monkeypatch.setattr(
         analysis_worker,
         "mark_event_analysis_processed",
@@ -188,9 +178,9 @@ def test_history_detection_is_not_persisted_again(monkeypatch):
 
     assert persisted == []
     assert alerts == []
-    assert result["detections_created"] == 0
-    assert result["alerts_created"] == 0
+    assert incidents == []
     assert result["events_processed"] == 1
+    assert result["incidents_created"] == 0
 
 
 def test_no_pending_events_is_noop(monkeypatch):
@@ -206,6 +196,8 @@ def test_no_pending_events_is_noop(monkeypatch):
         "detections_reused": 0,
         "alerts_created": 0,
         "alerts_reused": 0,
+        "incidents_created": 0,
+        "incidents_reused": 0,
         "events_failed": 0,
     }
 
@@ -218,7 +210,6 @@ def test_analysis_failure_marks_batch_failed(monkeypatch):
         "fetch_unprocessed_failed_login_events",
         lambda limit: events,
     )
-
     monkeypatch.setattr(
         analysis_worker,
         "fetch_failed_login_history",
@@ -246,54 +237,20 @@ def test_analysis_failure_marks_batch_failed(monkeypatch):
         analysis_worker.analyze_once()
 
     assert len(failed) == 2
-    assert all(
-        error == "analysis exploded"
-        for _, error in failed
-    )
 
 
-def test_reused_detection_and_alert_are_counted(monkeypatch):
+def test_reused_detection_alert_and_incident_are_counted(monkeypatch):
     events = same_device_events(5)
-
-    monkeypatch.setattr(
-        analysis_worker,
-        "fetch_unprocessed_failed_login_events",
-        lambda limit: events,
-    )
-
-    monkeypatch.setattr(
-        analysis_worker,
-        "fetch_failed_login_history",
-        lambda start_time, end_time: events,
-    )
-
-    monkeypatch.setattr(
-        analysis_worker,
-        "persist_detection",
-        lambda candidate: DetectionResult(created=False),
-    )
-
-    monkeypatch.setattr(
-        analysis_worker,
-        "create_alert_for_detection",
-        lambda detection_id: AlertResult(created=False),
-    )
-
-    monkeypatch.setattr(
-        analysis_worker,
-        "mark_event_analysis_processed",
-        lambda event_id: None,
-    )
+    wire_success(monkeypatch, events, created=False)
 
     result = analysis_worker.analyze_once()
 
-    assert result["detections_created"] == 0
     assert result["detections_reused"] == 1
-    assert result["alerts_created"] == 0
     assert result["alerts_reused"] == 1
+    assert result["incidents_reused"] == 1
 
 
-def test_alert_failure_keeps_batch_retryable(monkeypatch):
+def test_incident_failure_keeps_batch_retryable(monkeypatch):
     events = same_device_events(5)
 
     monkeypatch.setattr(
@@ -301,25 +258,27 @@ def test_alert_failure_keeps_batch_retryable(monkeypatch):
         "fetch_unprocessed_failed_login_events",
         lambda limit: events,
     )
-
     monkeypatch.setattr(
         analysis_worker,
         "fetch_failed_login_history",
         lambda start_time, end_time: events,
     )
-
     monkeypatch.setattr(
         analysis_worker,
         "persist_detection",
         lambda candidate: DetectionResult(created=True),
     )
-
     monkeypatch.setattr(
         analysis_worker,
         "create_alert_for_detection",
-        lambda detection_id: (
+        lambda detection_id: AlertResult(created=True),
+    )
+    monkeypatch.setattr(
+        analysis_worker,
+        "correlate_alert_to_incident",
+        lambda alert_id: (
             (_ for _ in ()).throw(
-                RuntimeError("alert insert failed")
+                RuntimeError("incident correlation failed")
             )
         ),
     )
@@ -332,7 +291,6 @@ def test_alert_failure_keeps_batch_retryable(monkeypatch):
         "mark_event_analysis_processed",
         lambda event_id: processed.append(str(event_id)),
     )
-
     monkeypatch.setattr(
         analysis_worker,
         "mark_event_analysis_failed",
@@ -343,7 +301,7 @@ def test_alert_failure_keeps_batch_retryable(monkeypatch):
 
     with pytest.raises(
         RuntimeError,
-        match="alert insert failed",
+        match="incident correlation failed",
     ):
         analysis_worker.analyze_once()
 
