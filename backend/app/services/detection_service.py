@@ -6,9 +6,7 @@ from uuid import UUID, uuid4
 import psycopg
 from dotenv import load_dotenv
 
-from app.analysis.failed_login_rule import (
-    FailedLoginDetectionCandidate,
-)
+from app.analysis.detection_candidate import DetectionCandidateLike
 from app.core.config import get_postgres_config
 
 
@@ -23,8 +21,40 @@ class PersistedDetection:
     created: bool
 
 
+_ALLOWED_SEVERITIES = {
+    "informational", "low", "medium", "high", "critical",
+}
+
+
+def _validate_candidate(candidate: DetectionCandidateLike) -> None:
+    """Reject incomplete or conflicting evidence before any database write."""
+    if (
+        not candidate.rule_id
+        or not candidate.rule_id.strip()
+        or not candidate.rule_name
+        or not candidate.rule_name.strip()
+        or not candidate.grouping_basis
+        or not candidate.grouping_basis.strip()
+    ):
+        raise ValueError("Detection requires rule identity and grouping basis")
+    if candidate.severity not in _ALLOWED_SEVERITIES:
+        raise ValueError("Invalid detection severity")
+    if not candidate.event_ids or len(set(candidate.event_ids)) != len(candidate.event_ids):
+        raise ValueError("Detection evidence IDs must be non-empty and unique")
+    if candidate.event_count != len(candidate.event_ids):
+        raise ValueError("Detection evidence count does not match event IDs")
+    if any(not str(event_id).strip() for event_id in candidate.event_ids):
+        raise ValueError("Detection evidence IDs cannot be empty")
+    if (
+        candidate.window_start.tzinfo is None
+        or candidate.window_end.tzinfo is None
+        or candidate.window_start > candidate.window_end
+    ):
+        raise ValueError("Detection time window must be timezone-aware and ordered")
+
+
 def build_detection_fingerprint(
-    candidate: FailedLoginDetectionCandidate,
+    candidate: DetectionCandidateLike,
 ) -> str:
     """
     Build a stable fingerprint for one detection episode.
@@ -33,6 +63,7 @@ def build_detection_fingerprint(
     produces the same fingerprint regardless of caller ordering.
     """
 
+    _validate_candidate(candidate)
     evidence = "|".join(
         sorted(str(event_id) for event_id in candidate.event_ids)
     )
@@ -41,7 +72,7 @@ def build_detection_fingerprint(
         (
             candidate.rule_id,
             candidate.device_id,
-            candidate.target_user.casefold(),
+            (candidate.target_user or "").casefold(),
             candidate.source_ip or "",
             str(candidate.logon_type or ""),
             candidate.grouping_basis,
@@ -57,7 +88,7 @@ def build_detection_fingerprint(
 
 
 def persist_detection(
-    candidate: FailedLoginDetectionCandidate,
+    candidate: DetectionCandidateLike,
 ) -> PersistedDetection:
     """
     Persist one rule result and its evidence links idempotently.
