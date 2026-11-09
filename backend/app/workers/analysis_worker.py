@@ -9,6 +9,7 @@ import psycopg
 from dotenv import load_dotenv
 
 from app.analysis.failed_login_rule import (
+    RULE_ID,
     DEFAULT_WINDOW,
     evaluate_repeated_failed_logins,
 )
@@ -60,8 +61,8 @@ def fetch_unprocessed_failed_login_events(
                     e.event_time,
                     e.raw_event
                 FROM security_events AS e
-                LEFT JOIN event_analysis_state AS s
-                  ON s.event_id = e.event_id
+                LEFT JOIN event_rule_analysis_state AS s
+                  ON s.event_id = e.event_id AND s.rule_id = %s
                 WHERE e.source = 'windows_eventlog'
                   AND e.raw_event->>'EventID' = '4625'
                   AND (
@@ -71,7 +72,7 @@ def fetch_unprocessed_failed_login_events(
                 ORDER BY e.event_time ASC, e.event_id ASC
                 LIMIT %s
                 """,
-                (limit,),
+                (RULE_ID, limit),
             )
 
             rows = cursor.fetchall()
