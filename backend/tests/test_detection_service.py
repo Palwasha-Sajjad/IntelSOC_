@@ -165,7 +165,7 @@ def test_mark_processed_upserts_state(monkeypatch):
 
     sql = cursor.execute.call_args.args[0]
 
-    assert "event_analysis_state" in sql
+    assert "event_rule_analysis_state" in sql
     assert "processed" in sql
 
 
@@ -187,6 +187,34 @@ def test_mark_failed_upserts_state_and_error(monkeypatch):
 
     sql, params = cursor.execute.call_args.args
 
-    assert "event_analysis_state" in sql
+    assert "event_rule_analysis_state" in sql
     assert "failed" in sql
     assert params[1] == "bad evidence"
+
+
+def test_per_rule_completed_state_is_scoped(monkeypatch):
+    cursor = MagicMock()
+    monkeypatch.setattr(
+        detection_service.psycopg, "connect",
+        lambda **kwargs: connection_with_cursor(cursor),
+    )
+    event_id = uuid4()
+    detection_service.mark_event_analysis_processed(event_id, "RULE-WIN-009")
+    sql, params = cursor.execute.call_args.args
+    assert "ON CONFLICT (event_id, rule_id)" in sql
+    assert params == (event_id, "RULE-WIN-009")
+
+
+def test_per_rule_failure_is_scoped(monkeypatch):
+    cursor = MagicMock()
+    monkeypatch.setattr(
+        detection_service.psycopg, "connect",
+        lambda **kwargs: connection_with_cursor(cursor),
+    )
+    event_id = uuid4()
+    detection_service.mark_event_analysis_failed(
+        event_id, "simulated error", "RULE-LIN-001"
+    )
+    sql, params = cursor.execute.call_args.args
+    assert "ON CONFLICT (event_id, rule_id)" in sql
+    assert params == (event_id, "RULE-LIN-001", "simulated error")
