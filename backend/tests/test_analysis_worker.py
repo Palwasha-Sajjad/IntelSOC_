@@ -114,6 +114,11 @@ def wire_success(monkeypatch, events, *, created=True):
         "mark_event_analysis_processed",
         lambda event_id: None,
     )
+    monkeypatch.setattr(
+        analysis_worker,
+        "enrich_pending_windows_4625_ips",
+        lambda pending: 0,
+    )
 
 
 def test_analyze_once_persists_alert_and_incident(monkeypatch):
@@ -307,3 +312,45 @@ def test_incident_failure_keeps_batch_retryable(monkeypatch):
 
     assert processed == []
     assert len(failed) == 5
+
+
+def test_enrichment_failure_does_not_suppress_detection(monkeypatch):
+    events = same_device_events(5)
+    wire_success(monkeypatch, events)
+    processed = []
+    monkeypatch.setattr(
+        analysis_worker,
+        "mark_event_analysis_processed",
+        lambda event_id: processed.append(str(event_id)),
+    )
+    monkeypatch.setattr(
+        analysis_worker,
+        "enrich_pending_windows_4625_ips",
+        lambda pending: (_ for _ in ()).throw(
+            RuntimeError("enrichment unavailable")
+        ),
+    )
+
+    result = analysis_worker.analyze_once()
+
+    assert result["events_processed"] == 5
+    assert result["detections_created"] == 1
+    assert result["alerts_created"] == 1
+    assert result["incidents_created"] == 1
+    assert len(processed) == 5
+
+
+def test_enrichment_receives_only_current_pending_batch(monkeypatch):
+    events = same_device_events(5)
+    wire_success(monkeypatch, events)
+    enriched = []
+    monkeypatch.setattr(
+        analysis_worker,
+        "enrich_pending_windows_4625_ips",
+        lambda pending: enriched.extend(pending),
+    )
+
+    result = analysis_worker.analyze_once()
+
+    assert result["events_processed"] == 5
+    assert enriched == events
