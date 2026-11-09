@@ -364,3 +364,107 @@ def test_enrichment_receives_only_current_pending_batch(monkeypatch):
 
     assert result["events_processed"] == 5
     assert enriched == events
+
+
+def security_log_clear_event():
+    record = event(0, 0)
+    record["raw_event"] = {
+        "EventID": 1102, "Channel": "Security",
+        "ProviderName": "Microsoft-Windows-Eventlog",
+        "StringInserts": ["S-1-5-18", "operator", "LAB", "0x123"],
+    }
+    return record
+
+
+def test_win002_persists_alert_incident_and_marks_only_its_state(monkeypatch):
+    record = security_log_clear_event()
+    monkeypatch.setattr(
+        analysis_worker, "fetch_unprocessed_security_log_clears",
+        lambda limit: [record],
+    )
+    calls = []
+    monkeypatch.setattr(
+        analysis_worker, "persist_detection",
+        lambda candidate: (
+            calls.append(("detection", candidate.rule_id))
+            or DetectionResult(created=True)
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_worker, "create_alert_for_detection",
+        lambda detection_id: AlertResult(created=True),
+    )
+    monkeypatch.setattr(
+        analysis_worker, "correlate_alert_to_incident",
+        lambda alert_id: IncidentResult(created=True),
+    )
+    monkeypatch.setattr(
+        analysis_worker, "mark_event_analysis_processed",
+        lambda event_id, rule_id: calls.append(("processed", rule_id)),
+    )
+    result = analysis_worker.analyze_security_log_clears_once()
+    assert result["events_processed"] == 1
+    assert result["detections_created"] == 1
+    assert result["alerts_created"] == 1
+    assert result["incidents_created"] == 1
+    assert result["events_failed"] == 0
+    assert calls == [
+        ("detection", "RULE-WIN-002"),
+        ("processed", "RULE-WIN-002"),
+    ]
+
+
+def test_win002_failure_remains_retryable_and_does_not_touch_win001(monkeypatch):
+    record = security_log_clear_event()
+    monkeypatch.setattr(
+        analysis_worker, "fetch_unprocessed_security_log_clears",
+        lambda limit: [record],
+    )
+    monkeypatch.setattr(
+        analysis_worker, "persist_detection",
+        lambda candidate: (_ for _ in ()).throw(RuntimeError("db unavailable")),
+    )
+    failures = []
+    monkeypatch.setattr(
+        analysis_worker, "mark_event_analysis_failed",
+        lambda event_id, error, rule_id: failures.append((error, rule_id)),
+    )
+    monkeypatch.setattr(
+        analysis_worker, "mark_event_analysis_processed",
+        lambda *args: pytest.fail("Must not mark failed event processed"),
+    )
+    result = analysis_worker.analyze_security_log_clears_once()
+    assert result["events_failed"] == 1
+    assert result["events_processed"] == 0
+    assert failures == [("db unavailable", "RULE-WIN-002")]
+
+
+def test_win002_reused_detection_does_not_create_duplicate_alert(monkeypatch):
+    record = security_log_clear_event()
+    monkeypatch.setattr(
+        analysis_worker, "fetch_unprocessed_security_log_clears",
+        lambda limit: [record],
+    )
+    monkeypatch.setattr(
+        analysis_worker, "persist_detection",
+        lambda candidate: DetectionResult(created=False),
+    )
+    monkeypatch.setattr(
+        analysis_worker, "create_alert_for_detection",
+        lambda detection_id: AlertResult(created=False),
+    )
+    monkeypatch.setattr(
+        analysis_worker, "correlate_alert_to_incident",
+        lambda alert_id: IncidentResult(created=False),
+    )
+    monkeypatch.setattr(
+        analysis_worker, "mark_event_analysis_processed",
+        lambda event_id, rule_id: None,
+    )
+    result = analysis_worker.analyze_security_log_clears_once()
+    assert result["detections_reused"] == 1
+    assert result["alerts_reused"] == 1
+    assert result["incidents_reused"] == 1
+    assert result["detections_created"] == 0
+    assert result["alerts_created"] == 0
+    assert result["incidents_created"] == 0
