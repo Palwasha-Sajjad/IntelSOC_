@@ -13,6 +13,7 @@ from app.analysis.failed_login_rule import (
     DEFAULT_WINDOW,
     evaluate_repeated_failed_logins,
 )
+from app.analysis.rule_dispatcher import RuleRunner, run_registered_rules
 from app.core.config import get_postgres_config
 from app.services.alert_service import (
     create_alert_for_detection,
@@ -287,30 +288,26 @@ def main() -> None:
         flush=True,
     )
 
-    while True:
-        try:
-            result = analyze_once()
+    # New rules will register here with independent runners and state.
+    rules = (RuleRunner(RULE_ID, analyze_once),)
 
-            if result["events_processed"]:
+    while True:
+        for outcome in run_registered_rules(rules):
+            if outcome.error is not None:
                 print(
-                    json.dumps(result),
+                    f"Rule {outcome.rule_id} error: {outcome.error}",
+                    flush=True,
+                )
+            elif outcome.result and outcome.result["events_processed"]:
+                print(
+                    json.dumps({
+                        "rule_id": outcome.rule_id,
+                        **outcome.result,
+                    }),
                     flush=True,
                 )
 
-        except psycopg.Error as error:
-            print(
-                f"Analysis database error: {error}",
-                flush=True,
-            )
-
-        except Exception as error:
-            print(
-                f"Analysis error: {error}",
-                flush=True,
-            )
-
         time.sleep(POLL_SECONDS)
-
 
 if __name__ == "__main__":
     try:
