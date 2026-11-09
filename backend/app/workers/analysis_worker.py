@@ -13,6 +13,11 @@ from app.analysis.failed_login_rule import (
     DEFAULT_WINDOW,
     evaluate_repeated_failed_logins,
 )
+from app.analysis.failed_then_success_rule import (
+    RULE_ID as AUTH_CORRELATION_RULE_ID,
+    WINDOW as AUTH_CORRELATION_WINDOW,
+    correlate_failed_then_successful_logins,
+)
 from app.analysis.rule_dispatcher import RuleRunner, run_registered_rules
 from app.analysis.account_lockout_rule import (
     RULE_ID as ACCOUNT_LOCKOUT_RULE_ID,
@@ -856,6 +861,156 @@ def analyze_password_change_once(
     return result
 
 
+
+
+def fetch_unprocessed_auth_success_events(
+    *, limit: int = BATCH_SIZE,
+) -> list[dict[str, Any]]:
+    """Select genuine-shaped successful Windows logons not yet analyzed by R2-D1.
+
+    Only interactive and remote sign-ins are candidates. Service logons do not
+    enter the rule's work queue; the detector still validates the full payload.
+    """
+    with psycopg.connect(
+        **get_postgres_config(), connect_timeout=5,
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT e.event_id, e.device_id, e.event_time, e.raw_event
+                FROM security_events e
+                LEFT JOIN event_rule_analysis_state s
+                  ON s.event_id = e.event_id AND s.rule_id = %s
+                WHERE e.source = 'windows_eventlog'
+                  AND e.event_type = 'windows_security_event'
+                  AND e.device_id IS NOT NULL
+                  AND e.raw_event->>'EventID' = '4624'
+                  AND lower(e.raw_event->>'Channel') = 'security'
+                  AND lower(e.raw_event->>'ProviderName') =
+                      'microsoft-windows-security-auditing'
+                  AND jsonb_typeof(e.raw_event->'StringInserts') = 'array'
+                  AND (e.raw_event->'StringInserts'->>8) IN ('2','3','10','11')
+                  AND (s.event_id IS NULL OR s.status = 'failed')
+                ORDER BY e.event_time ASC, e.event_id ASC
+                LIMIT %s
+                """,
+                (AUTH_CORRELATION_RULE_ID, limit),
+            )
+            rows = cursor.fetchall()
+    return [
+        {
+            "event_id": str(event_id),
+            "device_id": str(device_id),
+            "event_time": event_time,
+            "raw_event": raw_event,
+        }
+        for event_id, device_id, event_time, raw_event in rows
+    ]
+
+
+def fetch_auth_failure_context(
+    success_event: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Read a 5-minute, same-device 4625 window for one successful logon."""
+    with psycopg.connect(
+        **get_postgres_config(), connect_timeout=5,
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT event_id, device_id, event_time, raw_event
+                FROM security_events
+                WHERE source = 'windows_eventlog'
+                  AND event_type = 'windows_security_event'
+                  AND device_id = %s
+                  AND raw_event->>'EventID' = '4625'
+                  AND lower(raw_event->>'Channel') = 'security'
+                  AND lower(raw_event->>'ProviderName') =
+                      'microsoft-windows-security-auditing'
+                  AND event_time >= %s
+                  AND event_time < %s
+                ORDER BY event_time ASC, event_id ASC
+                """,
+                (
+                    success_event["device_id"],
+                    success_event["event_time"] - AUTH_CORRELATION_WINDOW,
+                    success_event["event_time"],
+                ),
+            )
+            rows = cursor.fetchall()
+    return [
+        {
+            "event_id": str(event_id),
+            "device_id": str(device_id),
+            "event_time": event_time,
+            "raw_event": raw_event,
+        }
+        for event_id, device_id, event_time, raw_event in rows
+    ]
+
+
+def analyze_auth_correlation_once(
+    *, limit: int = BATCH_SIZE,
+) -> dict[str, int]:
+    """Independently process 4624 triggers and link the original 4625 evidence.
+
+    State is acknowledged only after detection, alert and incident persistence.
+    Replays/retries reuse existing fingerprints and alert/incident links.
+    """
+    pending = fetch_unprocessed_auth_success_events(limit=limit)
+    result = {
+        "events_processed": 0,
+        "detections_created": 0,
+        "detections_reused": 0,
+        "alerts_created": 0,
+        "alerts_reused": 0,
+        "incidents_created": 0,
+        "incidents_reused": 0,
+        "events_failed": 0,
+    }
+    for success in pending:
+        event_id = UUID(success["event_id"])
+        try:
+            history = fetch_auth_failure_context(success)
+            candidates = correlate_failed_then_successful_logins(
+                [*history, success]
+            )
+            for candidate in candidates:
+                if candidate.event_ids[-1] != success["event_id"]:
+                    continue
+                detection = persist_detection(candidate)
+                result[
+                    "detections_created" if detection.created
+                    else "detections_reused"
+                ] += 1
+                alert = create_alert_for_detection(detection.detection_id)
+                result[
+                    "alerts_created" if alert.created
+                    else "alerts_reused"
+                ] += 1
+                incident = correlate_alert_to_incident(alert.alert_id)
+                result[
+                    "incidents_created" if incident.created
+                    else "incidents_reused"
+                ] += 1
+            mark_event_analysis_processed(
+                event_id, AUTH_CORRELATION_RULE_ID,
+            )
+            result["events_processed"] += 1
+        except Exception as error:
+            result["events_failed"] += 1
+            try:
+                mark_event_analysis_failed(
+                    event_id, str(error), AUTH_CORRELATION_RULE_ID,
+                )
+            except Exception as state_error:
+                print(
+                    f"WIN-008 analysis state failed: {state_error}",
+                    flush=True,
+                )
+            print(f"WIN-008 correlation failed: {error}", flush=True)
+    return result
+
 def main() -> None:
     print(
         "IntelSOC analysis worker started",
@@ -871,6 +1026,7 @@ def main() -> None:
         RuleRunner(ACCOUNT_DISABLE_DELETE_RULE_ID, analyze_account_disable_delete_once),
         RuleRunner(ACCOUNT_LOCKOUT_RULE_ID, analyze_account_lockout_once),
         RuleRunner(PASSWORD_CHANGE_RULE_ID, analyze_password_change_once),
+        RuleRunner(AUTH_CORRELATION_RULE_ID, analyze_auth_correlation_once),
     )
 
     while True:
