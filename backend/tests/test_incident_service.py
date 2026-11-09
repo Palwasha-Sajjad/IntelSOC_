@@ -384,3 +384,29 @@ def test_win004_incident_does_not_merge_with_unrelated_login_alert(monkeypatch):
         f"isolated|RULE-WIN-004|{alert_id}".encode("utf-8")
     ).hexdigest()
     assert matches[0].args[1][0] == expected
+
+
+def test_win005_incident_isolated_from_unrelated_lifecycle_and_login(monkeypatch):
+    import hashlib
+    alert_id = uuid4()
+    cursor = MagicMock()
+    baseline = alert_row(alert_id=alert_id)
+    row = (
+        alert_id, "RULE-WIN-005", "Windows User Account Deleted",
+        "medium", baseline[4], "LAB\\testuser", None, NOW,
+    )
+    cursor.fetchone.side_effect = [None, row, None, (alert_id,)]
+    monkeypatch.setattr(
+        incident_service.psycopg, "connect",
+        lambda **kwargs: connection_with_cursor(cursor),
+    )
+    incident_service.correlate_alert_to_incident(alert_id)
+    matches = [
+        call for call in cursor.execute.call_args_list
+        if "FROM incidents" in call.args[0]
+    ]
+    assert len(matches) == 1
+    expected = hashlib.sha256(
+        f"isolated|RULE-WIN-005|{alert_id}".encode("utf-8")
+    ).hexdigest()
+    assert matches[0].args[1][0] == expected
