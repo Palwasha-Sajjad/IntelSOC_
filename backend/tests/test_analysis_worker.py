@@ -73,6 +73,18 @@ def same_device_events(count: int):
     return events
 
 
+class DetectionResult:
+    def __init__(self, *, created: bool):
+        self.detection_id = uuid4()
+        self.created = created
+
+
+class AlertResult:
+    def __init__(self, *, created: bool):
+        self.alert_id = uuid4()
+        self.created = created
+
+
 def test_analyze_once_persists_threshold_crossing(monkeypatch):
     events = same_device_events(5)
 
@@ -90,15 +102,23 @@ def test_analyze_once_persists_threshold_crossing(monkeypatch):
 
     persisted = []
 
-    class Result:
-        created = True
-
     monkeypatch.setattr(
         analysis_worker,
         "persist_detection",
         lambda candidate: (
             persisted.append(candidate)
-            or Result()
+            or DetectionResult(created=True)
+        ),
+    )
+
+    alerts = []
+
+    monkeypatch.setattr(
+        analysis_worker,
+        "create_alert_for_detection",
+        lambda detection_id: (
+            alerts.append(detection_id)
+            or AlertResult(created=True)
         ),
     )
 
@@ -116,11 +136,14 @@ def test_analyze_once_persists_threshold_crossing(monkeypatch):
         "events_processed": 5,
         "detections_created": 1,
         "detections_reused": 0,
+        "alerts_created": 1,
+        "alerts_reused": 0,
         "events_failed": 0,
     }
 
     assert len(persisted) == 1
     assert persisted[0].event_count == 5
+    assert len(alerts) == 1
     assert len(processed) == 5
 
 
@@ -141,11 +164,18 @@ def test_history_detection_is_not_persisted_again(monkeypatch):
     )
 
     persisted = []
+    alerts = []
 
     monkeypatch.setattr(
         analysis_worker,
         "persist_detection",
         lambda candidate: persisted.append(candidate),
+    )
+
+    monkeypatch.setattr(
+        analysis_worker,
+        "create_alert_for_detection",
+        lambda detection_id: alerts.append(detection_id),
     )
 
     monkeypatch.setattr(
@@ -157,7 +187,9 @@ def test_history_detection_is_not_persisted_again(monkeypatch):
     result = analysis_worker.analyze_once()
 
     assert persisted == []
+    assert alerts == []
     assert result["detections_created"] == 0
+    assert result["alerts_created"] == 0
     assert result["events_processed"] == 1
 
 
@@ -172,6 +204,8 @@ def test_no_pending_events_is_noop(monkeypatch):
         "events_processed": 0,
         "detections_created": 0,
         "detections_reused": 0,
+        "alerts_created": 0,
+        "alerts_reused": 0,
         "events_failed": 0,
     }
 
@@ -218,7 +252,7 @@ def test_analysis_failure_marks_batch_failed(monkeypatch):
     )
 
 
-def test_reused_detection_is_counted(monkeypatch):
+def test_reused_detection_and_alert_are_counted(monkeypatch):
     events = same_device_events(5)
 
     monkeypatch.setattr(
@@ -233,13 +267,16 @@ def test_reused_detection_is_counted(monkeypatch):
         lambda start_time, end_time: events,
     )
 
-    class Result:
-        created = False
-
     monkeypatch.setattr(
         analysis_worker,
         "persist_detection",
-        lambda candidate: Result(),
+        lambda candidate: DetectionResult(created=False),
+    )
+
+    monkeypatch.setattr(
+        analysis_worker,
+        "create_alert_for_detection",
+        lambda detection_id: AlertResult(created=False),
     )
 
     monkeypatch.setattr(
@@ -252,3 +289,63 @@ def test_reused_detection_is_counted(monkeypatch):
 
     assert result["detections_created"] == 0
     assert result["detections_reused"] == 1
+    assert result["alerts_created"] == 0
+    assert result["alerts_reused"] == 1
+
+
+def test_alert_failure_keeps_batch_retryable(monkeypatch):
+    events = same_device_events(5)
+
+    monkeypatch.setattr(
+        analysis_worker,
+        "fetch_unprocessed_failed_login_events",
+        lambda limit: events,
+    )
+
+    monkeypatch.setattr(
+        analysis_worker,
+        "fetch_failed_login_history",
+        lambda start_time, end_time: events,
+    )
+
+    monkeypatch.setattr(
+        analysis_worker,
+        "persist_detection",
+        lambda candidate: DetectionResult(created=True),
+    )
+
+    monkeypatch.setattr(
+        analysis_worker,
+        "create_alert_for_detection",
+        lambda detection_id: (
+            (_ for _ in ()).throw(
+                RuntimeError("alert insert failed")
+            )
+        ),
+    )
+
+    processed = []
+    failed = []
+
+    monkeypatch.setattr(
+        analysis_worker,
+        "mark_event_analysis_processed",
+        lambda event_id: processed.append(str(event_id)),
+    )
+
+    monkeypatch.setattr(
+        analysis_worker,
+        "mark_event_analysis_failed",
+        lambda event_id, error: failed.append(
+            (str(event_id), error)
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="alert insert failed",
+    ):
+        analysis_worker.analyze_once()
+
+    assert processed == []
+    assert len(failed) == 5
