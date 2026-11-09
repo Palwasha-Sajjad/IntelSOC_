@@ -24,6 +24,9 @@ from app.services.detection_service import (
 from app.services.incident_service import (
     correlate_alert_to_incident,
 )
+from app.services.windows_src_ip_service import (
+    enrich_pending_windows_4625_ips,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -240,6 +243,17 @@ def analyze_once(
         for event in pending:
             mark_event_analysis_processed(
                 UUID(event["event_id"])
+            )
+
+        # Optional metadata enrichment follows successful rule/alert/incident
+        # persistence. It must never cause a completed detection to fail
+        # or produce duplicate alerts on retry.
+        try:
+            enrich_pending_windows_4625_ips(pending)
+        except Exception as error:
+            print(
+                f"Source IP enrichment failed (non-blocking): {error}",
+                flush=True,
             )
 
         return {
