@@ -189,7 +189,7 @@ def test_mark_failed_upserts_state_and_error(monkeypatch):
 
     assert "event_rule_analysis_state" in sql
     assert "failed" in sql
-    assert params[1] == "bad evidence"
+    assert params == (event_id, "RULE-WIN-001", "bad evidence")
 
 
 def test_per_rule_completed_state_is_scoped(monkeypatch):
