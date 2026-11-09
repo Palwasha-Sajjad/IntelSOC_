@@ -468,3 +468,132 @@ def test_win002_reused_detection_does_not_create_duplicate_alert(monkeypatch):
     assert result["detections_created"] == 0
     assert result["alerts_created"] == 0
     assert result["incidents_created"] == 0
+
+
+def privileged_group_event():
+    record = event(0, 0)
+    record["raw_event"] = {
+        "EventID": 4732, "Channel": "Security",
+        "ProviderName": "Microsoft-Windows-Security-Auditing",
+        "StringInserts": [
+            "-", "S-1-5-21-1-2-3-1001", "Administrators", "BUILTIN",
+            "S-1-5-32-544", "-", "admin", "LAB", "0x123", "-",
+        ],
+    }
+    return record
+
+
+def test_win003_creates_detection_alert_incident_and_only_its_state(monkeypatch):
+    record = privileged_group_event()
+    monkeypatch.setattr(
+        analysis_worker, "fetch_unprocessed_privileged_group_events",
+        lambda limit: [record],
+    )
+    calls = []
+    monkeypatch.setattr(
+        analysis_worker, "persist_detection",
+        lambda candidate: (
+            calls.append(("detection", candidate.rule_id))
+            or DetectionResult(created=True)
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_worker, "create_alert_for_detection",
+        lambda detection_id: AlertResult(created=True),
+    )
+    monkeypatch.setattr(
+        analysis_worker, "correlate_alert_to_incident",
+        lambda alert_id: IncidentResult(created=True),
+    )
+    monkeypatch.setattr(
+        analysis_worker, "mark_event_analysis_processed",
+        lambda event_id, rule_id: calls.append(("processed", rule_id)),
+    )
+    result = analysis_worker.analyze_privileged_group_once()
+    assert result["events_processed"] == 1
+    assert result["detections_created"] == 1
+    assert result["alerts_created"] == 1
+    assert result["incidents_created"] == 1
+    assert result["events_failed"] == 0
+    assert calls == [
+        ("detection", "RULE-WIN-003"),
+        ("processed", "RULE-WIN-003"),
+    ]
+
+
+def test_win003_ordinary_local_group_is_processed_without_alert(monkeypatch):
+    record = privileged_group_event()
+    record["raw_event"]["StringInserts"][4] = "S-1-5-32-545"
+    monkeypatch.setattr(
+        analysis_worker, "fetch_unprocessed_privileged_group_events",
+        lambda limit: [record],
+    )
+    monkeypatch.setattr(
+        analysis_worker, "persist_detection",
+        lambda candidate: pytest.fail("Ordinary group must not create detection"),
+    )
+    processed = []
+    monkeypatch.setattr(
+        analysis_worker, "mark_event_analysis_processed",
+        lambda event_id, rule_id: processed.append(rule_id),
+    )
+    result = analysis_worker.analyze_privileged_group_once()
+    assert result["events_processed"] == 1
+    assert result["detections_created"] == 0
+    assert processed == ["RULE-WIN-003"]
+
+
+def test_win003_failure_is_retryable_without_affecting_win001(monkeypatch):
+    record = privileged_group_event()
+    monkeypatch.setattr(
+        analysis_worker, "fetch_unprocessed_privileged_group_events",
+        lambda limit: [record],
+    )
+    monkeypatch.setattr(
+        analysis_worker, "persist_detection",
+        lambda candidate: (_ for _ in ()).throw(RuntimeError("database failure")),
+    )
+    failed = []
+    monkeypatch.setattr(
+        analysis_worker, "mark_event_analysis_failed",
+        lambda event_id, error, rule_id: failed.append((error, rule_id)),
+    )
+    monkeypatch.setattr(
+        analysis_worker, "mark_event_analysis_processed",
+        lambda *args: pytest.fail("Failed event must be retried"),
+    )
+    result = analysis_worker.analyze_privileged_group_once()
+    assert result["events_failed"] == 1
+    assert result["events_processed"] == 0
+    assert failed == [("database failure", "RULE-WIN-003")]
+
+
+def test_win003_reuses_existing_detection_alert_incident(monkeypatch):
+    record = privileged_group_event()
+    monkeypatch.setattr(
+        analysis_worker, "fetch_unprocessed_privileged_group_events",
+        lambda limit: [record],
+    )
+    monkeypatch.setattr(
+        analysis_worker, "persist_detection",
+        lambda candidate: DetectionResult(created=False),
+    )
+    monkeypatch.setattr(
+        analysis_worker, "create_alert_for_detection",
+        lambda detection_id: AlertResult(created=False),
+    )
+    monkeypatch.setattr(
+        analysis_worker, "correlate_alert_to_incident",
+        lambda alert_id: IncidentResult(created=False),
+    )
+    monkeypatch.setattr(
+        analysis_worker, "mark_event_analysis_processed",
+        lambda event_id, rule_id: None,
+    )
+    result = analysis_worker.analyze_privileged_group_once()
+    assert result["detections_reused"] == 1
+    assert result["alerts_reused"] == 1
+    assert result["incidents_reused"] == 1
+    assert result["detections_created"] == 0
+    assert result["alerts_created"] == 0
+    assert result["incidents_created"] == 0
