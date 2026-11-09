@@ -1,6 +1,6 @@
 import ipaddress
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Any
 
 
@@ -67,10 +67,22 @@ def extract_windows_failed_logon(
     if isinstance(inserts, list):
         structured = _extract_from_string_inserts(inserts)
 
-        # A short or incomplete insert list should not prevent fallback
-        # extraction from the preserved event message.
-        if _has_useful_evidence(structured):
+        # A complete insert list is authoritative, including explicit
+        # absent/invalid IP values. Do not override it with message text.
+        if len(inserts) >= 21:
             return structured
+
+        # For incomplete lists, preserve available structured fields while
+        # filling missing fields from the message (never mutate raw_event).
+        fallback = _extract_from_message(str(record.get("Message") or ""))
+        return WindowsFailedLogonEvidence(**{
+            field.name: (
+                getattr(structured, field.name)
+                if getattr(structured, field.name) is not None
+                else getattr(fallback, field.name)
+            )
+            for field in fields(WindowsFailedLogonEvidence)
+        })
 
     return _extract_from_message(str(record.get("Message") or ""))
 
@@ -237,20 +249,3 @@ def _section(
     return match.group(1) if match else ""
 
 
-def _has_useful_evidence(
-    evidence: WindowsFailedLogonEvidence,
-) -> bool:
-    return any(
-        value is not None
-        for value in (
-            evidence.target_user,
-            evidence.target_domain,
-            evidence.source_ip,
-            evidence.source_port,
-            evidence.logon_type,
-            evidence.status,
-            evidence.substatus,
-            evidence.process_name,
-            evidence.workstation_name,
-        )
-    )
