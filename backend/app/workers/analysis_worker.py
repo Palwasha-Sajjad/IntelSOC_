@@ -911,7 +911,12 @@ def fetch_unprocessed_auth_success_events(
 def fetch_auth_correlation_context(
     success_event: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Read earlier 4625 and 4624 events to avoid repeat-success alerts."""
+    """Read earlier failures and all preceding successes, including same-time peers.
+
+    When Windows records multiple 4624s at identical timestamps, order
+    success triggers by stored UUID so only the first can consume a burst.
+    Same-time failures are never treated as earlier failures.
+    """
     with psycopg.connect(
         **get_postgres_config(), connect_timeout=5,
     ) as connection:
@@ -928,13 +933,22 @@ def fetch_auth_correlation_context(
                   AND lower(raw_event->>'ProviderName') =
                       'microsoft-windows-security-auditing'
                   AND event_time >= %s
-                  AND event_time < %s
+                  AND (
+                        event_time < %s
+                        OR (
+                            event_time = %s
+                            AND raw_event->>'EventID' = '4624'
+                            AND event_id < %s
+                        )
+                  )
                 ORDER BY event_time ASC, event_id ASC
                 """,
                 (
                     success_event["device_id"],
                     success_event["event_time"] - AUTH_CORRELATION_WINDOW,
                     success_event["event_time"],
+                    success_event["event_time"],
+                    UUID(success_event["event_id"]),
                 ),
             )
             rows = cursor.fetchall()
