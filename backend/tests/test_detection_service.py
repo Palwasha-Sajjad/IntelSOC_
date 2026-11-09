@@ -256,10 +256,10 @@ def test_generic_candidate_with_missing_user_and_ip_persists(monkeypatch):
     assert result.detection_id == detection_id
     sql, params = cursor.execute.call_args_list[0].args
     assert "INSERT INTO detections" in sql
-    assert params[6] is None  # no invented target user
-    assert params[7] is None  # no invented source IP
-    assert params[8] is None  # no invented logon type
-    assert params[9] == "device_event"
+    assert params[5] is None  # no invented target user
+    assert params[6] is None  # no invented source IP
+    assert params[7] is None  # no invented logon type
+    assert params[8] == "device_event"
     assert len([call for call in cursor.execute.call_args_list
                 if "INSERT INTO detection_events" in call.args[0]]) == 1
 
