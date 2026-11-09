@@ -70,6 +70,24 @@ def _fragment(event: Mapping[str, Any]):
     return part_number, total_parts, script, block_id.casefold(), event_id, device_id, timestamp
 
 
+def is_complete_script_block(events: Sequence[Mapping[str, Any]]) -> bool:
+    if not events:
+        return False
+    fragments = [_fragment(event) for event in events]
+    if any(part is None for part in fragments):
+        return False
+    first = fragments[0]
+    total = first[1]
+    if len(fragments) != total:
+        return False
+    if any(
+        part[1] != total or part[3] != first[3] or part[5] != first[5]
+        for part in fragments
+    ):
+        return False
+    return {part[0] for part in fragments} == set(range(1, total + 1))
+
+
 def detect_suspicious_script_block(
     events: Sequence[Mapping[str, Any]],
 ) -> DetectionCandidate | None:
