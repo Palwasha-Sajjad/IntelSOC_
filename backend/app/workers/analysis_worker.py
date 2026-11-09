@@ -14,6 +14,10 @@ from app.analysis.failed_login_rule import (
     evaluate_repeated_failed_logins,
 )
 from app.analysis.rule_dispatcher import RuleRunner, run_registered_rules
+from app.analysis.account_lockout_rule import (
+    RULE_ID as ACCOUNT_LOCKOUT_RULE_ID,
+    detect_account_lockout,
+)
 from app.analysis.account_disable_delete_rule import (
     RULE_ID as ACCOUNT_DISABLE_DELETE_RULE_ID,
     detect_account_disable_or_delete,
@@ -670,6 +674,95 @@ def analyze_account_disable_delete_once(
     return result
 
 
+
+def fetch_unprocessed_account_lockout_events(
+    *, limit: int = BATCH_SIZE,
+) -> list[dict[str, Any]]:
+    """Fetch unhandled Windows lockout events for WIN-006 only."""
+    with psycopg.connect(
+        **get_postgres_config(), connect_timeout=5,
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT e.event_id, e.device_id, e.event_time, e.raw_event
+                FROM security_events AS e
+                LEFT JOIN event_rule_analysis_state AS s
+                  ON s.event_id = e.event_id AND s.rule_id = %s
+                WHERE e.source = 'windows_eventlog'
+                  AND e.event_type = 'windows_security_event'
+                  AND e.device_id IS NOT NULL
+                  AND e.raw_event->>'EventID' = '4740'
+                  AND lower(e.raw_event->>'Channel') = 'security'
+                  AND lower(e.raw_event->>'ProviderName') =
+                      'microsoft-windows-security-auditing'
+                  AND (s.event_id IS NULL OR s.status = 'failed')
+                ORDER BY e.event_time ASC, e.event_id ASC
+                LIMIT %s
+                """,
+                (ACCOUNT_LOCKOUT_RULE_ID, limit),
+            )
+            rows = cursor.fetchall()
+    return [
+        {
+            "event_id": str(event_id),
+            "device_id": str(device_id),
+            "event_time": event_time,
+            "raw_event": raw_event,
+        }
+        for event_id, device_id, event_time, raw_event in rows
+    ]
+
+
+def analyze_account_lockout_once(
+    *, limit: int = BATCH_SIZE,
+) -> dict[str, int]:
+    """Detect and persist account lockouts using the existing alert pipeline."""
+    pending = fetch_unprocessed_account_lockout_events(limit=limit)
+    result = {
+        "events_processed": 0,
+        "detections_created": 0,
+        "detections_reused": 0,
+        "alerts_created": 0,
+        "alerts_reused": 0,
+        "incidents_created": 0,
+        "incidents_reused": 0,
+        "events_failed": 0,
+    }
+    for event in pending:
+        event_id = UUID(event["event_id"])
+        try:
+            candidate = detect_account_lockout(event)
+            if candidate is not None:
+                detection = persist_detection(candidate)
+                result[
+                    "detections_created" if detection.created
+                    else "detections_reused"
+                ] += 1
+                alert = create_alert_for_detection(detection.detection_id)
+                result[
+                    "alerts_created" if alert.created
+                    else "alerts_reused"
+                ] += 1
+                incident = correlate_alert_to_incident(alert.alert_id)
+                result[
+                    "incidents_created" if incident.created
+                    else "incidents_reused"
+                ] += 1
+            mark_event_analysis_processed(event_id, ACCOUNT_LOCKOUT_RULE_ID)
+            result["events_processed"] += 1
+        except Exception as error:
+            result["events_failed"] += 1
+            try:
+                mark_event_analysis_failed(
+                    event_id, str(error), ACCOUNT_LOCKOUT_RULE_ID,
+                )
+            except Exception as state_error:
+                print(f"WIN-006 state update failed: {state_error}", flush=True)
+            print(f"WIN-006 event failed: {error}", flush=True)
+    return result
+
+
 def main() -> None:
     print(
         "IntelSOC analysis worker started",
@@ -683,6 +776,7 @@ def main() -> None:
         RuleRunner(PRIVILEGED_GROUP_RULE_ID, analyze_privileged_group_once),
         RuleRunner(ACCOUNT_LIFECYCLE_RULE_ID, analyze_account_lifecycle_once),
         RuleRunner(ACCOUNT_DISABLE_DELETE_RULE_ID, analyze_account_disable_delete_once),
+        RuleRunner(ACCOUNT_LOCKOUT_RULE_ID, analyze_account_lockout_once),
     )
 
     while True:
