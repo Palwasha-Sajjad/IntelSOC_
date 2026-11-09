@@ -54,19 +54,25 @@ def _suspicious_exec(task_xml: str) -> bool:
     if root.tag.split("}")[-1] != "Task":
         return False
 
-    # Check every Exec action, not only the first.
-    for actions in root.iter():
-        if actions.tag.split("}")[-1] != "Exec":
-            continue
-        command = _child_text(actions, "Command")
-        arguments = _child_text(actions, "Arguments")
-        if not command:
-            continue
-        executable = command.strip().strip('"').replace("/", "\\").split("\\")[-1]
-        if POWERSHELL_EXE.fullmatch(executable) and ENCODED_PS.search(arguments):
-            return True
-        if MSHTA_EXE.fullmatch(executable) and URL.search(arguments):
-            return True
+    # Only executable task actions count. A matching tag embedded in
+    # registration metadata or unrelated XML is not evidence of execution.
+    action_sections = [
+        child for child in root
+        if child.tag.split("}")[-1] == "Actions"
+    ]
+    for section in action_sections:
+        for action in section:
+            if action.tag.split("}")[-1] != "Exec":
+                continue
+            command = _child_text(action, "Command")
+            arguments = _child_text(action, "Arguments")
+            if not command:
+                continue
+            executable = command.strip().strip('"').replace("/", "\\").split("\\")[-1]
+            if POWERSHELL_EXE.fullmatch(executable) and ENCODED_PS.search(arguments):
+                return True
+            if MSHTA_EXE.fullmatch(executable) and URL.search(arguments):
+                return True
     return False
 
 
