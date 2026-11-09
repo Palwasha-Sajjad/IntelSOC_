@@ -13,6 +13,9 @@ from app.analysis.failed_login_rule import (
     evaluate_repeated_failed_logins,
 )
 from app.core.config import get_postgres_config
+from app.services.alert_service import (
+    create_alert_for_detection,
+)
 from app.services.detection_service import (
     mark_event_analysis_failed,
     mark_event_analysis_processed,
@@ -147,6 +150,7 @@ def analyze_once(
 
     Detections are persisted only when their threshold-crossing event belongs
     to the current unprocessed batch. Historical lookback is context only.
+    Each persisted detection is then mapped to exactly one security alert.
     """
 
     pending = fetch_unprocessed_failed_login_events(
@@ -158,6 +162,8 @@ def analyze_once(
             "events_processed": 0,
             "detections_created": 0,
             "detections_reused": 0,
+            "alerts_created": 0,
+            "alerts_reused": 0,
             "events_failed": 0,
         }
 
@@ -185,8 +191,10 @@ def analyze_once(
             history
         )
 
-        created = 0
-        reused = 0
+        detections_created = 0
+        detections_reused = 0
+        alerts_created = 0
+        alerts_reused = 0
 
         for candidate in candidates:
             # Only persist a detection whose threshold-crossing event is
@@ -198,12 +206,21 @@ def analyze_once(
             ):
                 continue
 
-            result = persist_detection(candidate)
+            detection = persist_detection(candidate)
 
-            if result.created:
-                created += 1
+            if detection.created:
+                detections_created += 1
             else:
-                reused += 1
+                detections_reused += 1
+
+            alert = create_alert_for_detection(
+                detection.detection_id
+            )
+
+            if alert.created:
+                alerts_created += 1
+            else:
+                alerts_reused += 1
 
         for event in pending:
             mark_event_analysis_processed(
@@ -212,8 +229,10 @@ def analyze_once(
 
         return {
             "events_processed": len(pending),
-            "detections_created": created,
-            "detections_reused": reused,
+            "detections_created": detections_created,
+            "detections_reused": detections_reused,
+            "alerts_created": alerts_created,
+            "alerts_reused": alerts_reused,
             "events_failed": 0,
         }
 
