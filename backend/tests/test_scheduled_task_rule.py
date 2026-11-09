@@ -126,3 +126,25 @@ def test_multiple_exec_actions_second_suspicious_detected():
         '</Actions></Task>'
     )
     assert detect_suspicious_scheduled_task(event(xml=xml)) is not None
+
+
+def test_exec_tag_outside_actions_is_not_task_execution():
+    xml = (
+        f'<Task xmlns="{NS}"><RegistrationInfo>'
+        '<Exec><Command>powershell.exe</Command>'
+        '<Arguments>-EncodedCommand SQBFAFgA</Arguments></Exec>'
+        '</RegistrationInfo><Actions>'
+        '<Exec><Command>notepad.exe</Command></Exec>'
+        '</Actions></Task>'
+    )
+    assert detect_suspicious_scheduled_task(event(xml=xml)) is None
+
+
+def test_task_action_requires_direct_exec_child():
+    xml = (
+        f'<Task xmlns="{NS}"><Actions>'
+        '<ComHandler><Exec><Command>powershell.exe</Command>'
+        '<Arguments>-enc SQBFAFgA</Arguments></Exec></ComHandler>'
+        '</Actions></Task>'
+    )
+    assert detect_suspicious_scheduled_task(event(xml=xml)) is None
