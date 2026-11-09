@@ -6,6 +6,16 @@ import pytest
 from app.workers import analysis_worker
 
 
+@pytest.fixture(autouse=True)
+def isolate_source_ip_enrichment(monkeypatch):
+    """Worker unit tests must never contact PostgreSQL for IP enrichment."""
+    monkeypatch.setattr(
+        analysis_worker,
+        "enrich_pending_windows_4625_ips",
+        lambda pending: 0,
+    )
+
+
 BASE_TIME = datetime(
     2026,
     11,
