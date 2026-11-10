@@ -32,3 +32,24 @@ def test_dispatcher_does_not_execute_duplicate_rule_id():
             RuleRunner("RULE-TEST-1", lambda: {}),
             RuleRunner("RULE-TEST-1", lambda: {}),
         ))
+
+
+
+def test_frozen_linux_rule_ids_are_unique_and_lin006_is_inactive():
+    from app.analysis.linux_ssh_bruteforce_rule import RULE_ID as lin001
+    from app.analysis.linux_ssh_failed_success_rule import RULE_ID as lin002
+    from app.analysis.linux_account_lifecycle_rule import RULE_ID as lin003
+    from app.analysis.linux_privileged_group_rule import RULE_ID as lin004
+    from app.analysis.linux_sudo_rule import RULE_ID as lin005
+
+    active = (lin001, lin002, lin003, lin004, lin005)
+
+    assert active == (
+        "RULE-LIN-001",
+        "RULE-LIN-002",
+        "RULE-LIN-003",
+        "RULE-LIN-004",
+        "RULE-LIN-005",
+    )
+    assert len(set(active)) == len(active)
+    assert "RULE-LIN-006" not in active
