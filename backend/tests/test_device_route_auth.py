@@ -46,9 +46,31 @@ def make_fake_redis():
         def __init__(self):
             self.entries = []
 
-        def xadd(self, stream, fields):
-            self.entries.append((stream, fields))
-            return b"1-0"
+        class Pipeline:
+            def __init__(self, client):
+                self.client = client
+                self.pending = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def xadd(self, stream, fields):
+                self.pending.append((stream, fields))
+                return self
+
+            def execute(self):
+                self.client.entries.extend(self.pending)
+                return [
+                    f"{index + 1}-0".encode()
+                    for index in range(len(self.pending))
+                ]
+
+        def pipeline(self, transaction=True):
+            assert transaction is True
+            return self.Pipeline(self)
 
         def close(self):
             pass
@@ -215,17 +237,12 @@ def test_successful_windows_ingestion_updates_last_seen(monkeypatch):
         lambda value: device,
     )
 
-    class FakeRedis:
-        def xadd(self, stream, fields):
-            return b"1-0"
-
-        def close(self):
-            pass
+    fake_redis = make_fake_redis()
 
     monkeypatch.setattr(
         events.redis,
         "Redis",
-        lambda **kwargs: FakeRedis(),
+        lambda **kwargs: fake_redis,
     )
 
     seen = []
@@ -278,19 +295,14 @@ def test_linux_audit_event_is_accepted(
 
     queued = []
 
-    def fake_receive_event(event):
-        queued.append(event)
-
-        return {
-            "status": "queued",
-            "event_id": str(event.event_id),
-            "stream_id": "1-0",
-        }
+    def fake_queue_events(batch):
+        queued.extend(batch)
+        return [b"1-0" for _ in batch]
 
     monkeypatch.setattr(
         events,
-        "receive_event",
-        fake_receive_event,
+        "_queue_events",
+        fake_queue_events,
     )
 
     monkeypatch.setattr(
@@ -363,3 +375,49 @@ def test_linux_unsupported_audit_type_is_rejected(
 
     assert response.status_code == 422
 
+
+
+def test_windows_ingestion_rejects_linux_registered_device(monkeypatch):
+    device_id = uuid4()
+    monkeypatch.setattr(
+        security,
+        "get_device_by_id",
+        lambda value: {
+            "device_id": device_id,
+            "hostname": "LAB-LINUX-01",
+            "platform": "linux",
+            "status": "active",
+        },
+    )
+
+    response = client.post(
+        "/api/v1/events/windows",
+        headers={"X-Device-ID": str(device_id)},
+        json=[sample_windows_record()],
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Device is not registered as windows"
+
+
+def test_linux_ingestion_rejects_windows_registered_device(monkeypatch):
+    device_id = uuid4()
+    monkeypatch.setattr(
+        security,
+        "get_device_by_id",
+        lambda value: {
+            "device_id": device_id,
+            "hostname": "LAB-WIN-01",
+            "platform": "windows",
+            "status": "active",
+        },
+    )
+
+    response = client.post(
+        "/api/v1/events/linux",
+        headers={"X-Device-ID": str(device_id)},
+        json=[sample_linux_record()],
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Device is not registered as linux"
