@@ -18,4 +18,6 @@ def get_redis_config() -> dict:
         "host": os.getenv("REDIS_HOST", "127.0.0.1"),
         "port": int(os.getenv("REDIS_PORT", "6380")),
         "decode_responses": False,
+        "socket_connect_timeout": 5,
+        "socket_timeout": 5,
     }
