@@ -45,7 +45,7 @@ class IncidentResult:
     created: bool = True
 
 
-def test_lin003_worker_persists_suspicious_remote_sudo(monkeypatch):
+def test_lin005_worker_persists_suspicious_remote_sudo(monkeypatch):
     pending = [sudo_event(
         "socadmin : TTY=pts/0 ; PWD=/home/socadmin ; "
         "USER=root ; COMMAND=/usr/bin/id",
@@ -82,12 +82,12 @@ def test_lin003_worker_persists_suspicious_remote_sudo(monkeypatch):
     assert result["alerts_created"] == 1
     assert result["incidents_created"] == 1
     assert calls == [
-        ("detection", "RULE-LIN-003"),
-        ("processed", "RULE-LIN-003"),
+        ("detection", "RULE-LIN-005"),
+        ("processed", "RULE-LIN-005"),
     ]
 
 
-def test_lin003_worker_marks_benign_local_sudo_processed(monkeypatch):
+def test_lin005_worker_marks_benign_local_sudo_processed(monkeypatch):
     pending = [sudo_event(
         "socadmin : TTY=pts/0 ; PWD=/home/socadmin ; "
         "USER=root ; COMMAND=/usr/bin/id"
@@ -109,10 +109,10 @@ def test_lin003_worker_marks_benign_local_sudo_processed(monkeypatch):
     result = analysis_worker.analyze_linux_sudo_once()
     assert result["events_processed"] == 1
     assert result["detections_created"] == 0
-    assert processed == ["RULE-LIN-003"]
+    assert processed == ["RULE-LIN-005"]
 
 
-def test_lin003_worker_failure_is_retryable(monkeypatch):
+def test_lin005_worker_failure_is_retryable(monkeypatch):
     pending = [sudo_event(
         "guest : user NOT in sudoers ; TTY=pts/0 ; "
         "PWD=/home/guest ; USER=root ; COMMAND=/usr/bin/id"
@@ -140,10 +140,10 @@ def test_lin003_worker_failure_is_retryable(monkeypatch):
     with pytest.raises(RuntimeError, match="database unavailable"):
         analysis_worker.analyze_linux_sudo_once()
 
-    assert failed == [("database unavailable", "RULE-LIN-003")]
+    assert failed == [("database unavailable", "RULE-LIN-005")]
 
 
-def test_lin003_worker_reuses_artifacts_on_retry(monkeypatch):
+def test_lin005_worker_reuses_artifacts_on_retry(monkeypatch):
     pending = [sudo_event(
         "guest : user NOT in sudoers ; TTY=pts/0 ; "
         "PWD=/home/guest ; USER=root ; COMMAND=/usr/bin/id"
@@ -175,7 +175,7 @@ def test_lin003_worker_reuses_artifacts_on_retry(monkeypatch):
     assert result["incidents_reused"] == 1
 
 
-def test_lin003_worker_no_pending_is_noop(monkeypatch):
+def test_lin005_worker_no_pending_is_noop(monkeypatch):
     monkeypatch.setattr(
         analysis_worker, "fetch_unprocessed_linux_sudo_events",
         lambda limit: [],
