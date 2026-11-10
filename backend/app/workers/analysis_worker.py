@@ -70,6 +70,10 @@ from app.analysis.linux_ssh_failed_success_rule import (
     WINDOW as LINUX_SSH_AUTH_CORRELATION_WINDOW,
     correlate_ssh_failed_then_success,
 )
+from app.analysis.linux_sudo_rule import (
+    RULE_ID as LINUX_SUDO_RULE_ID,
+    detect_suspicious_sudo,
+)
 from app.core.config import get_postgres_config
 from app.services.alert_service import (
     create_alert_for_detection,
@@ -710,6 +714,130 @@ def analyze_linux_ssh_auth_correlation_once(
             except Exception:
                 pass
         raise
+
+
+def fetch_unprocessed_linux_sudo_events(
+    *, limit: int = BATCH_SIZE,
+) -> list[dict[str, Any]]:
+    """Return Linux sudo events not yet processed by LIN-003."""
+
+    with psycopg.connect(
+        **get_postgres_config(),
+        connect_timeout=5,
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    e.event_id,
+                    e.device_id,
+                    e.event_time,
+                    e.src_ip,
+                    e.message,
+                    e.raw_event
+                FROM security_events AS e
+                LEFT JOIN event_rule_analysis_state AS s
+                  ON s.event_id = e.event_id
+                 AND s.rule_id = %s
+                WHERE e.source = 'linux_journald'
+                  AND e.event_type = 'linux_sudo_event'
+                  AND e.device_id IS NOT NULL
+                  AND (s.event_id IS NULL OR s.status = 'failed')
+                ORDER BY e.event_time ASC, e.event_id ASC
+                LIMIT %s
+                """,
+                (LINUX_SUDO_RULE_ID, limit),
+            )
+            rows = cursor.fetchall()
+
+    return [
+        {
+            "event_id": str(event_id),
+            "device_id": str(device_id),
+            "event_time": event_time,
+            "src_ip": (
+                str(src_ip)
+                if src_ip is not None
+                else None
+            ),
+            "message": message,
+            "raw_event": raw_event,
+        }
+        for event_id, device_id, event_time, src_ip, message, raw_event in rows
+    ]
+
+
+def analyze_linux_sudo_once(
+    *, limit: int = BATCH_SIZE,
+) -> dict[str, int]:
+    """Run LIN-003 with independent per-rule state and idempotent persistence."""
+
+    pending = fetch_unprocessed_linux_sudo_events(limit=limit)
+
+    result = {
+        "events_processed": 0,
+        "detections_created": 0,
+        "detections_reused": 0,
+        "alerts_created": 0,
+        "alerts_reused": 0,
+        "incidents_created": 0,
+        "incidents_reused": 0,
+        "events_failed": 0,
+    }
+
+    for event in pending:
+        event_id = UUID(event["event_id"])
+
+        try:
+            candidate = detect_suspicious_sudo(event)
+
+            if candidate is not None:
+                detection = persist_detection(candidate)
+                result[
+                    "detections_created"
+                    if detection.created
+                    else "detections_reused"
+                ] += 1
+
+                alert = create_alert_for_detection(
+                    detection.detection_id
+                )
+                result[
+                    "alerts_created"
+                    if alert.created
+                    else "alerts_reused"
+                ] += 1
+
+                incident = correlate_alert_to_incident(
+                    alert.alert_id
+                )
+                result[
+                    "incidents_created"
+                    if incident.created
+                    else "incidents_reused"
+                ] += 1
+
+            mark_event_analysis_processed(
+                event_id,
+                LINUX_SUDO_RULE_ID,
+            )
+            result["events_processed"] += 1
+
+        except Exception as error:
+            result["events_failed"] += 1
+
+            try:
+                mark_event_analysis_failed(
+                    event_id,
+                    str(error),
+                    LINUX_SUDO_RULE_ID,
+                )
+            except Exception:
+                pass
+
+            raise
+
+    return result
 
 
 def fetch_unprocessed_security_log_clears(
@@ -1849,6 +1977,7 @@ def main() -> None:
         RuleRunner(RULE_ID, analyze_once),
         RuleRunner(LINUX_SSH_BRUTEFORCE_RULE_ID, analyze_linux_ssh_bruteforce_once),
         RuleRunner(LINUX_SSH_AUTH_CORRELATION_RULE_ID, analyze_linux_ssh_auth_correlation_once),
+        RuleRunner(LINUX_SUDO_RULE_ID, analyze_linux_sudo_once),
         RuleRunner(SECURITY_LOG_CLEARED_RULE_ID, analyze_security_log_clears_once),
         RuleRunner(PRIVILEGED_GROUP_RULE_ID, analyze_privileged_group_once),
         RuleRunner(ACCOUNT_LIFECYCLE_RULE_ID, analyze_account_lifecycle_once),
