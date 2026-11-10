@@ -1,17 +1,16 @@
-# IntelSOC — Threat Intelligence Handoff
+# IntelSOC — Current Backend & Threat Intelligence Handoff
 
-**Purpose:** Continue IntelSOC from the exact validated pre-TI state without repeating or disturbing completed Windows/Linux ingestion and detection work.
+**Status date:** 11 November 2026  
+**Purpose:** Preserve the latest validated IntelSOC state and provide the exact continuation point without reopening completed ingestion, detection, or Threat Intelligence work.
 
-## 1. Current validated architecture
-
-Current runtime path:
+## 1. Current validated runtime
 
 ```text
-Windows endpoints / Ubuntu-Debian endpoints
+Windows / Linux endpoints
         ↓
-Fluent Bit collectors
+Fluent Bit
         ↓
-Caddy HTTPS gateway (TLS)
+Caddy HTTPS/TLS gateway
         ↓
 FastAPI ingestion API
         ↓
@@ -19,232 +18,292 @@ Redis Stream: intelsoc:events
         ↓
 event_worker
         ↓
-PostgreSQL
+PostgreSQL security_events
         ↓
 analysis_worker
         ↓
+Detection rules
+        ↓
 Detections → Alerts → Incidents
         ↓
-Threat Intelligence enrichment (NEXT)
+ti_worker
+        ↓
+Evidence-backed IOC extraction
+        ↓
+VirusTotal + AbuseIPDB
+        ↓
+Normalized/cached TI results in PostgreSQL
 ```
 
-Current validated technologies:
+Current runtime components:
 
-- **Backend:** Python + FastAPI + Uvicorn
-- **Queue:** Redis 7, Redis Streams, append-only persistence, no-eviction policy
-- **Database:** PostgreSQL 17
-- **Collectors:** Fluent Bit
-- **Linux audit source:** journald + auditd
-- **Gateway/TLS:** Caddy
-- **Runtime orchestration:** Docker Compose for PostgreSQL/Redis; PowerShell startup/shutdown scripts for the local IntelSOC services
-- **Testing:** Pytest
-- **DB access:** psycopg 3
-- **Redis client:** redis-py
+- FastAPI + Uvicorn
+- Redis 7
+- PostgreSQL 17
+- Fluent Bit endpoint collectors
+- Caddy TLS gateway
+- Python event, analysis, and Threat Intelligence workers
+- Pytest regression suite
+- PowerShell startup/shutdown orchestration
 
-PostgreSQL/Redis are bound to localhost in the current single-host lab setup. FastAPI runs on localhost and Caddy exposes the authenticated HTTPS collector endpoint.
-
-The earlier React/Vite dashboard is **not present in this validated repository checkpoint**, so it must not be treated as part of the currently verified runtime.
+The validated repository still does not contain the earlier React/Vite dashboard prototype.
 
 ## 2. Ingestion status
 
 ### Windows
+Working through managed Fluent Bit collection with preserved device identity and raw event evidence.
 
-Windows collection is complete and working through the managed Fluent Bit service.
-
-Collected sources include:
-
-- Application
-- System
-- Selected Security events
-- PowerShell Operational Event 4104
-
-Security telemetry used by current rules includes Event IDs:
+Important current Windows events include:
 
 `4624, 4625, 4648, 4688, 4698, 4702, 4720, 4722, 4723, 4725, 4726, 4732, 4740, 1102`
 
-The Windows deployment installer performs authenticated enrollment, TLS verification, persistent buffering/checkpoints, preserves the existing endpoint identity during migration, and sends to:
-
-`POST /api/v1/events/windows`
+PowerShell Operational Event 4104 is also collected for script-block analysis.
 
 ### Linux
-
-Linux collection is complete for the approved scope:
+Approved Linux scope is implemented for:
 
 - SSH journald events
 - sudo journald events
-- auditd account/group events:
-  - `ADD_USER`
-  - `DEL_USER`
-  - `USER_MGMT`
-  - `ADD_GROUP`
-  - `DEL_GROUP`
-  - `GRP_MGMT`
-- narrowly keyed identity-file `SYSCALL` evidence using `intelsoc_identity_change`
+- auditd account/group lifecycle events
+- narrowly keyed identity-file SYSCALL evidence
 
-Linux sends to:
+Broad Linux EXECVE collection remains intentionally disabled.
 
-`POST /api/v1/events/linux`
+## 3. Detection status
 
-Broad Linux `EXECVE` collection is intentionally **not enabled**.
+Current Windows rules: **WIN-001 through WIN-012**.
 
-Both platforms preserve the trusted `device_id` and original `raw_event` evidence.
+Current Linux rules: **LIN-001 through LIN-005**.
 
-## 3. Linux detection rules — frozen alignment
+**LIN-006 remains disabled by design** because the approved telemetry does not provide enough broad command-execution evidence for a reliable detector.
 
-| Rule | Current state |
-|---|---|
-| **LIN-001 — SSH brute-force attempts** | Complete. Five failed SSH authentications within five minutes, grouped by compatible device/source/user evidence. IPv4/IPv6 supported; missing/invalid source IP is not used for brute-force correlation. |
-| **LIN-002 — Failed SSH followed by successful authentication** | Complete. Requires five prior failures followed by a later successful SSH login within five minutes using compatible device/source/user context. |
-| **LIN-003 — Sensitive account lifecycle** | Complete. Detects successful `ADD_USER`, `DEL_USER`, and supported non-group `USER_MGMT`. Group-oriented evidence is left to LIN-004. |
-| **LIN-004 — Privileged group changes** | Complete. Alerts only for explicitly privileged groups; ordinary groups are benign. Current privileged allowlist: `root`, `sudo`, `wheel`, `adm`, `shadow`, `docker`, `lxd`. |
-| **LIN-005 — Suspicious sudo activity** | Complete. Ordinary local successful sudo is benign. Evidence-backed remote sudo or explicit authorization/authentication failure can alert. |
-| **LIN-006 — Suspicious command execution** | **Disabled by design.** Current Linux telemetry does not collect broad EXECVE/PROCTITLE/PATH context needed to reconstruct command execution reliably. The frozen plan requires this rule to remain disabled rather than broaden telemetry or implement a weak detector. |
-
-Important LIN-006 detail: keyed identity-file `SYSCALL` records are still collected, but they are not treated as generic command-execution alerts.
-
-## 4. Existing Windows detection capabilities
-
-Current active Windows rules:
-
-- **WIN-001:** repeated failed logins (4625; five in five minutes)
-- **WIN-002:** Windows Security audit log cleared (1102)
-- **WIN-003:** member added to local Administrators (4732, verified by Administrators SID)
-- **WIN-004:** user account created/enabled (4720/4722)
-- **WIN-005:** user account disabled/deleted (4725/4726)
-- **WIN-006:** user account locked out (4740)
-- **WIN-007:** user password-change attempt (4723)
-- **WIN-008:** failed logins followed by a successful login (4625 → 4624 correlation)
-- **WIN-009:** high-confidence suspicious scheduled-task command (4698/4702)
-- **WIN-010:** high-confidence suspicious process creation (4688)
-- **WIN-011:** suspicious PowerShell script block (4104), including multi-part reconstruction
-- **WIN-012:** unusual explicit-credential use (4648) with conservative context checks
-
-The detection engine is Python-based and intentionally reuses a shared pipeline:
+Detection processing remains:
 
 ```text
-normalized stored event
+stored event
   → rule evaluation
   → deterministic detection fingerprint
   → detection persistence
-  → one alert per detection
+  → alert persistence
   → incident correlation
   → per-rule processed/failed state
 ```
 
-Replay/idempotency is enforced through deterministic fingerprints and database uniqueness constraints.
+Replay/idempotency protections remain in place.
 
-## 5. Latest stabilization fixes
+## 4. Threat Intelligence — implemented state
 
-The pre-TI stabilization pass intentionally did **not** change detection logic.
+Threat Intelligence is now integrated and operational for the current FYP scope.
 
-Fixes added:
+### Providers
 
-1. **Platform-bound device ingestion**
-   - A registered Windows device cannot use the Linux collector endpoint and vice versa.
-   - Prevents cross-platform device identity misuse.
+| Provider | Status | Supported IOC types |
+|---|---|---|
+| VirusTotal | ✅ Implemented and validated | public IP, domain |
+| AbuseIPDB | ✅ Implemented and validated | public IP |
+| AlienVault OTX | ☐ Optional / not started | planned later only if needed |
 
-2. **Atomic batch queueing**
-   - Validated Windows/Linux batches are queued in one Redis transaction.
-   - Prevents a failed request from partially accepting only part of a batch.
+### IOC policy
 
-3. **Heartbeat safety**
-   - A failed queue operation does not update the endpoint `last_seen` timestamp.
+IntelSOC enriches only evidence-backed indicators from preserved event evidence.
 
-4. **Bounded Redis waits**
-   - Redis connect/socket waits are capped at 5 seconds.
-   - Prevents unhealthy Redis connections from hanging ingestion/workers indefinitely.
+Current safeguards:
 
-5. **Linux API-key regression coverage**
-   - Linux ingestion is explicitly included in shared API-key enforcement tests.
+- public/global IP validation before provider lookup
+- private, loopback, link-local, reserved and documentation addresses rejected
+- domains extracted only from approved structured evidence contexts
+- arbitrary message text is not scanned for IOCs
+- raw logs, internal hostnames, usernames and internal IPs are not sent to providers
+- files are not uploaded to VirusTotal
+- AbuseIPDB remains IP-only
 
-6. **Frozen Linux rule-ID invariant**
-   - Tests lock active Linux IDs to LIN-001 through LIN-005 and confirm LIN-006 remains inactive.
-
-Existing reliability already retained:
-
-- PostgreSQL failure does not ACK the Redis event.
-- Invalid events move to the DLQ.
-- Rule failures are isolated by the dispatcher.
-- Per-rule retry state is independent.
-- Raw evidence and device identity are preserved.
-- Duplicate detections/alerts/incident links are prevented by stable fingerprints/DB constraints.
-
-## 6. Verified test evidence
-
-Latest laptop validation on **10 November 2026**:
-
-### Focused pre-TI stability suite
+## 5. TI processing flow
 
 ```text
-90 passed
-0 failed
-1 warning
+Security alert
+    ↓
+Find linked detection/event evidence
+    ↓
+Extract eligible public IP/domain
+    ↓
+Check PostgreSQL ti_results cache
+    ↓
+Cache hit? ── yes → reuse result
+    │
+    no
+    ↓
+Query provider
+    ↓
+Normalize provider result
+    ↓
+Persist ti_results
+    ↓
+Persist alert/event/result provenance
+    ↓
+Update provider-specific alert TI state
 ```
 
-### Full backend regression
+### TI database tables
+
+- `ti_results`
+  - provider result + cache record
+  - unique by provider / indicator type / indicator value
+  - includes verdict, lookup status, confidence, provider data, checked time and expiry
+
+- `alert_ti_indicators`
+  - links TI results back to alert/event evidence
+  - preserves provenance
+
+- `alert_ti_analysis_state`
+  - provider-aware processing state
+  - primary identity is alert + provider
+
+## 6. Cache and failure behavior
+
+Threat Intelligence cache is persistent in PostgreSQL, not Redis.
+
+Normal successful results use a **24-hour TTL**.
+
+Transient failures use a **5-minute TTL**.
+
+Lookup status and verdict are intentionally separate:
+
+- verdict: malicious / suspicious / benign / unknown
+- lookup status: success / not_found / rate_limited / error
+
+Provider failures do not become benign results and do not block the core ingestion/detection pipeline.
+
+## 7. Validated TI behavior
+
+Validated scenarios include:
+
+- VirusTotal domain lookup from preserved Windows evidence
+- VirusTotal public-IP lookup
+- AbuseIPDB public-IP lookup
+- provider-specific cache hits
+- no repeat provider call on valid cache hit
+- idempotent TI result/event/alert links
+- provider-specific processing state
+- retry behavior after transient provider failure
+- real VirusTotal authentication failure handled as unknown/error
+- real AbuseIPDB lookup persisted successfully
+- historical alerts with no eligible IOCs processed without unnecessary provider requests
+
+The last validated provider queues were:
 
 ```text
-449 passed
-0 failed
-1 warning
+VirusTotal pending: 0
+AbuseIPDB pending: 0
 ```
 
-Only known warning:
+## 8. Runtime startup/shutdown
+
+`Start-IntelSOC.ps1` now starts:
+
+1. Docker Desktop if needed
+2. PostgreSQL + Redis
+3. FastAPI
+4. event_worker
+5. analysis_worker
+6. **ti_worker**
+7. Caddy
+8. health/runtime checks
+
+The startup script verifies that the TI worker remains alive after launch instead of reporting a false successful start.
+
+`Stop-IntelSOC.ps1` now stops:
+
+1. Caddy ingress
+2. FastAPI
+3. **ti_worker**
+4. analysis_worker
+5. event_worker
+6. PostgreSQL + Redis
+
+This avoids leaving the TI worker running after IntelSOC shutdown and stops infrastructure only after backend workers.
+
+The TI worker loads the root project `.env` with override enabled so stale PowerShell provider-key variables do not silently supersede the project configuration.
+
+## 9. Secrets
+
+Required TI variables:
+
+```text
+VT_API_KEY
+ABUSEIPDB_KEY
+```
+
+They belong only in the root `.env`, which is ignored by Git.
+
+Never commit, paste, screenshot, log, or document actual provider keys.
+
+## 10. Latest regression baseline
+
+Latest validated local full backend result:
+
+```text
+533 passed
+0 failed
+1 known warning
+```
+
+Known warning:
 
 ```text
 Starlette TestClient:
 anyio.abc.BlockingPortal alias is deprecated
 ```
 
-This is a dependency deprecation warning and did not fail the test suite.
+The warning is dependency-related and not a functional failure.
 
-## 7. Git state / checkpoint
+## 11. Pending TI validation
 
-Validated code branch:
+One final TI acceptance scenario remains useful:
 
-`pre-ti-stabilization`
+**live endpoint-to-TI validation**
 
-Validated stabilization checkpoint:
+The target flow is:
 
-`5f5b468 — Validate IntelSOC pre-TI stability and ingestion hardening`
+```text
+real endpoint activity
+ → Fluent Bit
+ → HTTPS ingestion
+ → Redis
+ → event_worker
+ → PostgreSQL
+ → analysis_worker
+ → real detection/alert
+ → ti_worker
+ → evidence-backed public IOC
+ → VirusTotal / AbuseIPDB
+ → persisted TI enrichment
+```
 
-At the time of validation:
+No alert or TI result should be inserted manually during this test.
 
-- branch was up to date with `origin/pre-ti-stabilization`
-- working tree was clean
-- no failed backend tests
+Do not weaken IOC validation just to make this demonstration work.
 
-This handoff document is added after that validated code checkpoint and does not change runtime code.
+## 12. Current scope boundary
 
-## 8. Known limitations / do not reopen unnecessarily
+Threat Intelligence currently enriches alerts only.
 
-- **LIN-006 is disabled** because Linux command-execution telemetry is insufficient by design.
-- Historical development DB rows may contain older Linux rule numbering from before the final alignment; active code is correctly aligned now.
-- The current collector authentication model uses a shared ingestion key plus registered device ID. It is suitable for the current FYP/lab design but is not a production zero-trust endpoint identity system.
-- The validated repository checkpoint does not include the React/Vite dashboard.
-- Threat Intelligence is not integrated yet.
-- Transformer/AI, risk scoring, response automation, reporting and dashboard work are later phases and should not be mixed into the TI implementation unless explicitly planned.
-- Do not broaden Linux telemetry, rewrite working detection rules, introduce YAML migration, or change the architecture during TI integration unless a real blocker requires it.
+It does **not** automatically:
 
-## 9. Next phase — Threat Intelligence
+- change alert severity
+- block an IP
+- isolate an endpoint
+- trigger destructive response actions
 
-Implement Threat Intelligence in this order:
+Those decisions belong to later correlation/risk-scoring and controlled-response layers.
 
-1. **VirusTotal**
-2. **AbuseIPDB**
-3. **AlienVault OTX**
+## 13. Next project layers
 
-Recommended approach for the next conversation:
+After the live TI validation and TI freeze:
 
-- inspect the current event/detection/alert schema before adding TI tables/services
-- reuse the existing FastAPI/PostgreSQL/service structure
-- detect supported indicators from stored evidence (IP/domain/hash only when genuinely present)
-- keep external provider failures/timeouts non-blocking to ingestion and rule processing
-- add provider-specific normalization into one common TI result shape
-- add caching/rate-limit awareness before repeated provider calls
-- store enough provider evidence for explainability without storing secrets
-- use mocked/offline tests first; do not require live API keys for the backend regression suite
-- keep all provider keys in environment variables only
-- preserve current 449-test green baseline before adding TI
+1. Transformer anomaly analysis / LAnoBERT integration
+2. correlation and explainable risk scoring
+3. dashboard/API presentation of rule + TI + AI evidence
+4. controlled response workflow
+5. reporting and final evaluation
 
-**Immediate starting point:** inspect the current database schema and service patterns, then design the smallest additive TI data model/service contract for VirusTotal without changing existing ingestion/detection behavior.
+Do not add extra TI providers unless they add a clear missing capability. OTX remains optional.
