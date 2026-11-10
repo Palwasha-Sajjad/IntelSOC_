@@ -135,3 +135,17 @@ def test_privileged_group_allowlist_is_explicit():
     assert "sudo" in PRIVILEGED_GROUPS
     assert "docker" in PRIVILEGED_GROUPS
     assert "developers" not in PRIVILEGED_GROUPS
+
+
+def test_native_user_mgmt_privileged_group_id_is_detected():
+    candidate = detect_linux_privileged_group_change(
+        audit_event(
+            'type=USER_MGMT msg=audit(1794334200.123:609): '
+            'acct="alice" '
+            'msg=\'op=add-shadow-group acct="alice" res=success\''
+            'ID="sudo"'
+        )
+    )
+    assert candidate is not None
+    assert candidate.target_user == "alice"
+    assert candidate.grouping_basis == "device_privileged_group:sudo"
