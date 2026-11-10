@@ -149,3 +149,15 @@ def test_native_user_mgmt_privileged_group_id_is_detected():
     assert candidate is not None
     assert candidate.target_user == "alice"
     assert candidate.grouping_basis == "device_privileged_group:sudo"
+
+
+def test_group_record_prefers_privileged_id_over_user_acct():
+    candidate = detect_linux_privileged_group_change(
+        audit_event(
+            'type=GRP_MGMT msg=audit(1794334200.123:610): '
+            'acct="alice" res=success ID="sudo"'
+        )
+    )
+    assert candidate is not None
+    assert candidate.target_user == "alice"
+    assert candidate.grouping_basis == "device_privileged_group:sudo"
