@@ -25,9 +25,19 @@ WINDOWS_EVENT = {
     "Message": "Test event",
 }
 
+LINUX_EVENT = {
+    "_HOSTNAME": "LAB-LINUX-01",
+    "_BOOT_ID": "11111111111111111111111111111111",
+    "_SOURCE_REALTIME_TIMESTAMP": "1793970000000000",
+    "_SYSTEMD_UNIT": "ssh.service",
+    "_PID": "2222",
+    "MESSAGE": "Accepted publickey for test from 192.0.2.50 port 55122 ssh2",
+}
+
 ENDPOINTS = [
     ("/api/v1/events", EVENT),
     ("/api/v1/events/windows", [WINDOWS_EVENT]),
+    ("/api/v1/events/linux", [LINUX_EVENT]),
 ]
 
 
