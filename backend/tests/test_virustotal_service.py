@@ -200,3 +200,21 @@ def test_missing_key_and_invalid_timeout_rejected():
             timeout_seconds=0,
             client=FakeClient(FakeResponse(200, {})),
         )
+
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_authentication_errors_are_identified(status_code):
+    result = lookup_virustotal(
+        ThreatIndicator("ip", "8.8.8.8"),
+        api_key="test-key",
+        client=FakeClient(FakeResponse(status_code)),
+    )
+
+    assert result.verdict == "unknown"
+    assert result.lookup_status == "error"
+    assert result.confidence is None
+    assert result.details == {
+        "http_status": status_code,
+        "error_type": "authentication_error",
+    }
