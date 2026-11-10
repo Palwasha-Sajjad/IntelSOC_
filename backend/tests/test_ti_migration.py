@@ -59,3 +59,18 @@ def test_alert_ti_analysis_state_is_retryable_and_idempotent():
     assert "attempts INTEGER NOT NULL DEFAULT 0" in sql
     assert "last_error TEXT" in sql
     assert "processed_at TIMESTAMPTZ" in sql
+
+
+PROVIDER_STATE_MIGRATION = (
+    ROOT / "migrations" / "010_make_ti_state_provider_aware.sql"
+)
+
+
+def test_provider_state_migration_preserves_existing_vt_state():
+    sql = PROVIDER_STATE_MIGRATION.read_text(encoding="utf-8")
+
+    assert "ADD COLUMN IF NOT EXISTS provider VARCHAR(50)" in sql
+    assert "SET provider = 'virustotal'" in sql
+    assert "ALTER COLUMN provider SET NOT NULL" in sql
+    assert "provider IN ('virustotal', 'abuseipdb', 'otx')" in sql
+    assert "ADD PRIMARY KEY (alert_id, provider)" in sql
