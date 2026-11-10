@@ -879,7 +879,10 @@ def fetch_unprocessed_linux_identity_events(
                         OR (
                             e.event_type = 'linux_process_audit_event'
                             AND e.message LIKE 'type=SYSCALL %%'
-                            AND e.message LIKE '%%key=%intelsoc_identity_change%%'
+                            AND (
+                                e.message LIKE '%%key="intelsoc_identity_change"%%'
+                                OR e.message LIKE '%%key=intelsoc_identity_change%%'
+                            )
                         )
                   )
                   AND (s.event_id IS NULL OR s.status = 'failed')
