@@ -40,6 +40,10 @@ _AUDIT_SUCCESS_RE = re.compile(
     r"(?i)(?:^|[\s'])res=success(?:$|[\s'])"
 )
 
+_NATIVE_ID_RE = re.compile(
+    r'(?:^|[\s\'])ID="(?P<value>[^"]+)"'
+)
+
 _GROUP_FIELD_NAMES = {
     "grp",
     "group",
@@ -126,6 +130,14 @@ def _parse_fields(body: str) -> dict[str, str]:
             if match.group("quoted") is not None
             else match.group("bare")
         )
+
+    # Native auditd may concatenate the closing single quote of msg='...'
+    # directly with ID="..." (no whitespace). Recover that explicit subject
+    # field without broadening the generic parser.
+    native_id = _NATIVE_ID_RE.search(body)
+    if native_id is not None:
+        fields["ID"] = native_id.group("value")
+
     return fields
 
 
