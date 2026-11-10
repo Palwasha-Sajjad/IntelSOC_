@@ -339,3 +339,185 @@ def test_ttl_validation_happens_before_persistence(monkeypatch):
             now=NOW,
             cache_ttl=timedelta(0),
         )
+
+
+
+def test_abuseipdb_filters_out_domain_indicators(monkeypatch):
+    alert_id = uuid4()
+    row = evidence(
+        {
+            "EventID": 4688,
+            "Channel": "Security",
+            "ProviderName": "Microsoft-Windows-Security-Auditing",
+            "StringInserts": [""] * 8 + [
+                "powershell.exe https://example.com/payload"
+            ],
+        },
+        alert_id=alert_id,
+    )
+
+    monkeypatch.setattr(service, "get_alert_evidence", lambda value: (row,))
+    processed = []
+    monkeypatch.setattr(service, "mark_alert_ti_processed", processed.append)
+
+    summary = service.enrich_alert_with_abuseipdb(
+        alert_id,
+        api_key="unused",
+        now=NOW,
+        lookup=lambda *args, **kwargs: pytest.fail(
+            "AbuseIPDB must not receive domains"
+        ),
+    )
+
+    assert summary.indicators == 0
+    assert summary.provider_lookups == 0
+    assert summary.status == "processed"
+    assert processed == [alert_id]
+
+
+def test_abuseipdb_cache_hit_uses_provider_specific_cache(monkeypatch):
+    alert_id = uuid4()
+    row = evidence(windows_4625("8.8.8.8"), alert_id=alert_id)
+    result_id = uuid4()
+
+    monkeypatch.setattr(service, "get_alert_evidence", lambda value: (row,))
+
+    cache_calls = []
+
+    def fake_cache(provider, indicator_type, indicator_value, *, now):
+        cache_calls.append(
+            (provider, indicator_type, indicator_value, now)
+        )
+        return CachedTiResult(
+            result_id=result_id,
+            provider="abuseipdb",
+            indicator_type="ip",
+            indicator_value="8.8.8.8",
+            verdict="benign",
+            lookup_status="success",
+            confidence=0,
+            details={},
+            checked_at=NOW - timedelta(hours=1),
+            expires_at=NOW + timedelta(hours=23),
+        )
+
+    monkeypatch.setattr(service, "get_cached_ti_result", fake_cache)
+    monkeypatch.setattr(service, "link_alert_indicator", lambda **kwargs: None)
+    monkeypatch.setattr(service, "mark_alert_ti_processed", lambda value: None)
+
+    summary = service.enrich_alert_with_abuseipdb(
+        alert_id,
+        api_key="unused",
+        now=NOW,
+        lookup=lambda *args, **kwargs: pytest.fail("must use cache"),
+    )
+
+    assert cache_calls == [("abuseipdb", "ip", "8.8.8.8", NOW)]
+    assert summary.cache_hits == 1
+    assert summary.provider_lookups == 0
+    assert summary.status == "processed"
+
+
+def test_abuseipdb_cache_miss_calls_provider_and_persists(monkeypatch):
+    alert_id = uuid4()
+    row = evidence(windows_4625("1.1.1.1"), alert_id=alert_id)
+    stored_result_id = uuid4()
+
+    monkeypatch.setattr(service, "get_alert_evidence", lambda value: (row,))
+    monkeypatch.setattr(
+        service,
+        "get_cached_ti_result",
+        lambda *args, **kwargs: None,
+    )
+
+    lookup_calls = []
+
+    def fake_lookup(indicator, *, api_key):
+        lookup_calls.append((indicator, api_key))
+        return ProviderResult(
+            provider="abuseipdb",
+            indicator_type="ip",
+            indicator_value="1.1.1.1",
+            verdict="suspicious",
+            lookup_status="success",
+            confidence=20,
+            details={"abuse_confidence_score": 20},
+        )
+
+    persisted = []
+
+    def fake_persist(result, *, checked_at, expires_at):
+        persisted.append((result, checked_at, expires_at))
+        return stored_result_id
+
+    monkeypatch.setattr(service, "persist_ti_result", fake_persist)
+    monkeypatch.setattr(service, "link_alert_indicator", lambda **kwargs: None)
+    monkeypatch.setattr(service, "mark_alert_ti_processed", lambda value: None)
+
+    summary = service.enrich_alert_with_abuseipdb(
+        alert_id,
+        api_key="abuse-key",
+        now=NOW,
+        lookup=fake_lookup,
+    )
+
+    assert len(lookup_calls) == 1
+    assert lookup_calls[0][0].indicator_type == "ip"
+    assert lookup_calls[0][1] == "abuse-key"
+    assert persisted[0][0].provider == "abuseipdb"
+    assert persisted[0][2] == NOW + timedelta(hours=24)
+    assert summary.provider_lookups == 1
+    assert summary.status == "processed"
+
+
+@pytest.mark.parametrize("lookup_status", ["rate_limited", "error"])
+def test_abuseipdb_transient_failure_marks_alert_failed(
+    monkeypatch,
+    lookup_status,
+):
+    alert_id = uuid4()
+    row = evidence(windows_4625("9.9.9.9"), alert_id=alert_id)
+
+    monkeypatch.setattr(service, "get_alert_evidence", lambda value: (row,))
+    monkeypatch.setattr(
+        service,
+        "get_cached_ti_result",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        service,
+        "persist_ti_result",
+        lambda result, *, checked_at, expires_at: (
+            pytest.fail("wrong transient TTL")
+            if expires_at != NOW + timedelta(minutes=5)
+            else uuid4()
+        ),
+    )
+    monkeypatch.setattr(service, "link_alert_indicator", lambda **kwargs: None)
+
+    failures = []
+    monkeypatch.setattr(
+        service,
+        "mark_alert_ti_failed",
+        lambda alert_id, error: failures.append((alert_id, error)),
+    )
+
+    summary = service.enrich_alert_with_abuseipdb(
+        alert_id,
+        api_key="key",
+        now=NOW,
+        lookup=lambda indicator, *, api_key: ProviderResult(
+            provider="abuseipdb",
+            indicator_type="ip",
+            indicator_value=indicator.value,
+            verdict="unknown",
+            lookup_status=lookup_status,
+            confidence=None,
+            details={},
+        ),
+    )
+
+    assert summary.status == "failed"
+    assert summary.provider_lookups == 1
+    assert failures
+    assert lookup_status in failures[0][1]
