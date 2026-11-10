@@ -157,19 +157,17 @@ def _extract_group(
             if group is not None:
                 return group
 
-    # Native group-management records commonly expose the changed group
-    # through acct= or ID= instead of grp=. USER_MGMT may also expose the
-    # affected privileged group as ID=; accept that only when the value is
-    # itself in the explicit privileged allowlist.
-    if record_type in {"ADD_GROUP", "DEL_GROUP", "GRP_MGMT"}:
-        return _account_subject(fields)
+    # Native records can place the affected user in acct= while exposing the
+    # changed group through ID=. Prefer an ID only when it is explicitly one
+    # of our privileged groups, then fall back to acct= for group records.
+    candidate_id = _clean_identity(fields.get("ID"))
+    if (
+        candidate_id is not None
+        and candidate_id.casefold() in PRIVILEGED_GROUPS
+    ):
+        return candidate_id
 
-    if record_type == "USER_MGMT":
-        candidate = _clean_identity(fields.get("ID"))
-        if (
-            candidate is not None
-            and candidate.casefold() in PRIVILEGED_GROUPS
-        ):
-            return candidate
+    if record_type in {"ADD_GROUP", "DEL_GROUP", "GRP_MGMT"}:
+        return _clean_identity(fields.get("acct"))
 
     return None
