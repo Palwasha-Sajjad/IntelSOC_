@@ -155,9 +155,12 @@ def _looks_like_group_operation(body: str) -> bool:
     return any(
         marker in lowered
         for marker in (
-            "group",
-            "grp",
-            "add-shadow-group",
-            "remove-shadow-group",
+            "op=add-shadow-group",
+            "op=remove-shadow-group",
+            "op=adding user to group",
+            "op=deleting user from group",
+            "op=deleting user from shadow group",
+            "op=add-group",
+            "op=del-group",
         )
     )
