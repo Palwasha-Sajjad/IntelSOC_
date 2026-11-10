@@ -15,7 +15,7 @@ from app.services.ti_persistence_service import mark_alert_ti_failed
 
 
 ROOT = Path(__file__).resolve().parents[3]
-load_dotenv(ROOT / ".env")
+load_dotenv(ROOT / ".env", override=True)
 
 POLL_SECONDS = 1.0
 BATCH_SIZE = 20
