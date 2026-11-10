@@ -134,3 +134,13 @@ def test_malformed_or_untrusted_event_is_ignored():
     )
     event["event_time"] = NOW.replace(tzinfo=None)
     assert detect_linux_account_lifecycle(event) is None
+
+
+def test_user_mgmt_group_operation_without_grp_field_is_left_to_lin004():
+    event = audit_event(
+        'type=USER_MGMT msg=audit(1794333600.123:509): '
+        'acct="alice" '
+        'msg=\'op=add-shadow-group acct="alice" res=success\''
+        'ID="sudo"'
+    )
+    assert detect_linux_account_lifecycle(event) is None
