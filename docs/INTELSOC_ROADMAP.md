@@ -2,7 +2,7 @@
 
 **Project:** IntelSOC — Smart Threat Intelligence and Response System  
 **Scope:** One student, two 14-week semesters, 8 GB Windows laptop, free tools  
-**Status date:** 3 November 2026  
+**Status date:** 11 November 2026  
 **Rule:** Do not start the next module until its acceptance test passes and the current code is committed.
 
 ## The finished product
@@ -36,10 +36,10 @@ Verification, expiry/reversal, audit trail & PDF reports
 | **1A** | W1 | Backend foundation | FastAPI, `/health`, Swagger, Pytest | Health API returns 200; tests pass | ✅ Done |
 | **1B** | W2 | Local infrastructure | Docker PostgreSQL 17, Redis 7, FastAPI service-status API | Both services respond; API returns `ready`; failure case tested | ✅ Done |
 | **1C** | W3 | Event queue & persistence | `/events`, Pydantic schema, Redis consumer, SQL storage, duplicate protection, DLQ | Event stored; same ID saved once; pending message recovered; malformed event quarantined; **12 tests pass** | ✅ Core done |
-| **1D** | W4–5 | Windows log collector | Fluent Bit Windows `winlog`, checkpoint DB, safe local HTTP collection, log-to-schema adapter | At least 20 actual Windows event records arrive in PostgreSQL with host, time, type, and raw message | ☐ Next |
-| **1E** | W6–7 | Linux & network log normalization | Linux `tail` collector; test syslog input if available; versioned parsers, API-key collector authentication, bounded retry/buffering | Windows + Linux representative logs stored; malformed/duplicate/replayed entries handled | Core verified; acceptance checks pending |
-| **2A** | W8–9 | YAML detection rules | Failed-login burst; repeated firewall denies/scan signal; suspicious successful login following failures | Each rule has true-positive and benign-case tests; no duplicate alerts on replay | ☐ |
-| **2B** | W10 | Alerts and incidents | Alert DB tables, event-to-alert links, simple correlation, lifecycle statuses | One attack session creates traceable incident; two repeat events do not create duplicate alert records | ☐ |
+| **1D** | W4–5 | Windows log collector | Fluent Bit Windows collection, checkpoint DB, authenticated HTTPS ingestion, log-to-schema adapter | Actual Windows event records arrive in PostgreSQL with host, time, type, device identity and raw evidence | ✅ Done |
+| **1E** | W6–7 | Linux log ingestion & normalization | Linux journald/auditd collection, authenticated HTTPS ingestion, normalization, bounded retry/buffering | Windows + Linux representative logs stored; malformed/duplicate/replayed entries handled | ✅ Approved Linux scope done |
+| **2A** | W8–9 | Detection rules | Windows and Linux evidence-based detections with correlation and replay protection | Rules have positive/benign coverage; duplicate alerts prevented on replay | ✅ Current Windows/Linux rule scope done |
+| **2B** | W10 | Alerts and incidents | Alert DB tables, event-to-alert links, correlation, lifecycle statuses | Detections create traceable alerts/incidents without duplicate records | ✅ Done |
 | **3A** | W11–12 | BERT dataset & feasibility | Collect normal log sequences, label held-out lab scenarios, normalize dynamic tokens, run DistilBERT embeddings | 100 sample log messages encoded on available hardware; train/validation/test split documented | ☐ |
 | **3B** | W13–14 | BERT semantic analysis | Security event semantic representations; label/similarity evaluation; small MLM adaptation if compute allows | Semantic predictions evaluated against manually labeled examples; baseline and errors reported | ☐ |
 
@@ -48,7 +48,7 @@ Verification, expiry/reversal, audit trail & PDF reports
 | ID | Suggested weeks | Module | Build | Definition of done | Status |
 |---|---|---|---|---|---|
 | **3C** | W1–2 | BERT behavioral anomaly analysis | Group ordered events by host/user; embed 10–20-event sequences; fit anomaly scorer; separate inference worker | Holdout results include precision, recall, F1, false-positive rate, and inference latency; compare with non-BERT baseline | ☐ |
-| **4A** | W3–4 | Threat intelligence & risk | AbuseIPDB client, cache and timeouts, rule/TI/BERT evidence combination, reason codes | Offline-mock tests pass, cache avoids repeat lookups, AI-only score cannot authorize blocking | ☐ |
+| **4A** | W3–4 | Threat intelligence & risk | VirusTotal + AbuseIPDB enrichment, persistent cache, provider state, later rule/TI/AI risk combination | TI mock/live provider tests pass and cache avoids repeat lookups; risk scoring remains separate | 🟡 TI complete; risk pending |
 | **4B** | W5–6 | Web dashboard & login | React incident list, event timeline, BERT results, JWT and server-side analyst/admin RBAC | Analyst can view events; unauthorized user cannot approve actions; incident detail shows evidence | ☐ |
 | **5A** | W7–9 | Safe MikroTik response engine | Dry-run, action queue, audit ledger, safety allowlist, human approvals, native TTL blocks, verification, circuit breaker | Isolated-lab block expires; management IP denied; timeout results in uncertain status and reconciliation | ☐ |
 | **5B** | W10–11 | Multi-action response playbooks | Notifications, evidence bundle, incident escalation; optionally lab endpoint response agent for approval-only host firewall block or test-account disable/restore | Three safe playbook action types visible and audited; any endpoint action is reversible and test-only | ☐ |
@@ -89,3 +89,27 @@ Verification, expiry/reversal, audit trail & PDF reports
 ## Completion tracking rule
 
 Update the status column to `✅ Done` only after the module's definition of done is demonstrated, tests recorded, and Git commit created. Write failed tests and blockers directly beneath the relevant module; never silently skip an unfinished dependency.
+
+
+## Current implementation checkpoint — 11 November 2026
+
+The original roadmap above is retained as planning history, but the implemented backend has progressed beyond several earlier status markers.
+
+Current verified state:
+
+- Windows and approved Linux telemetry ingestion are operational.
+- Current Windows detections: WIN-001 through WIN-012.
+- Current Linux detections: LIN-001 through LIN-005; LIN-006 remains disabled by design.
+- Alerts/incidents and replay/idempotency protections are implemented.
+- Threat Intelligence is implemented with VirusTotal and AbuseIPDB.
+- TI uses evidence-backed public indicators only and stores its persistent cache in PostgreSQL.
+- TI processing is provider-aware, retryable and non-blocking to the core SOC pipeline.
+- `Start-IntelSOC.ps1` / `Stop-IntelSOC.ps1` now manage the TI worker.
+- Latest validated local regression: **533 passed, 0 failed, 1 known warning**.
+- Final live endpoint → alert → TI enrichment acceptance testing is pending.
+- AlienVault OTX remains optional.
+- Transformer analysis, combined risk scoring, dashboard integration, response automation and reporting remain later work.
+
+### Transformer note
+
+The current practical prototype direction is **LAnoBERT-style log anomaly scoring on CPU**, rather than treating the earlier DistilBERT wording in this v1.0 roadmap as a locked implementation requirement. Final model evaluation should remain documented and evidence-based before the AI module is frozen.
