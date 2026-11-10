@@ -29,7 +29,7 @@ _FIELD_RE = re.compile(
 )
 
 _AUDIT_SUCCESS_RE = re.compile(
-    r"(?i)(?:^|[\\s'])res=success(?:$|[\\s'])"
+    r"(?i)(?:^|[\s'])res=success(?:$|[\s'])"
 )
 
 
