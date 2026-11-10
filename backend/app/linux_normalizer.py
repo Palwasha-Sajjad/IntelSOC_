@@ -1,5 +1,7 @@
-﻿from datetime import datetime, timezone
+from datetime import datetime, timezone
 from uuid import NAMESPACE_URL, uuid5
+
+from app.linux_src_ip import extract_linux_source_ip
 
 
 def _classify_linux_record(record: dict) -> str:
@@ -101,7 +103,7 @@ def normalize_linux_event(record: dict) -> dict:
         "source": "linux_journald",
         "hostname": hostname,
         "event_type": event_type,
-        "src_ip": None,
+        "src_ip": extract_linux_source_ip(record),
         "message": message[:2048],
         "raw_event": dict(record),
     }
