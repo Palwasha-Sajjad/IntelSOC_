@@ -216,12 +216,22 @@ def test_mark_alert_ti_processed_upserts_state(monkeypatch):
 
     alert_id = uuid4()
 
-    ti_persistence_service.mark_alert_ti_processed(alert_id)
+    ti_persistence_service.mark_alert_ti_processed(
+        alert_id,
+        provider="abuseipdb",
+    )
 
     sql, params = cursor.execute.call_args.args
     assert "alert_ti_analysis_state" in sql
+    assert "ON CONFLICT (alert_id, provider)" in sql
     assert "attempts = alert_ti_analysis_state.attempts + 1" in sql
-    assert params == (alert_id, "processed", None, "processed")
+    assert params == (
+        alert_id,
+        "abuseipdb",
+        "processed",
+        None,
+        "processed",
+    )
 
 
 def test_mark_alert_ti_failed_records_error(monkeypatch):
@@ -238,13 +248,30 @@ def test_mark_alert_ti_failed_records_error(monkeypatch):
     ti_persistence_service.mark_alert_ti_failed(
         alert_id,
         "provider timeout",
+        provider="virustotal",
     )
 
     sql, params = cursor.execute.call_args.args
     assert "alert_ti_analysis_state" in sql
     assert params == (
         alert_id,
+        "virustotal",
         "failed",
         "provider timeout",
         "failed",
     )
+
+
+
+def test_alert_ti_state_rejects_unknown_provider(monkeypatch):
+    monkeypatch.setattr(
+        ti_persistence_service.psycopg,
+        "connect",
+        lambda **kwargs: pytest.fail("database must not be touched"),
+    )
+
+    with pytest.raises(ValueError, match="unsupported TI provider"):
+        ti_persistence_service.mark_alert_ti_processed(
+            uuid4(),
+            provider="unknown-provider",
+        )
