@@ -7,7 +7,7 @@ from app.analysis.detection_candidate import DetectionCandidate
 from app.linux_src_ip import extract_linux_source_ip
 
 
-RULE_ID = "RULE-LIN-003"
+RULE_ID = "RULE-LIN-005"
 RULE_NAME = "Suspicious Sudo Activity"
 
 _STANDARD_SUDO_RE = re.compile(
@@ -32,7 +32,7 @@ _USER_FIELD_RE = re.compile(r"(?i)(?:^|\s)user=(?P<user>[^\s;]+)")
 def detect_suspicious_sudo(
     event: Mapping[str, Any],
 ) -> DetectionCandidate | None:
-    """Return LIN-003 only for evidence-backed suspicious sudo activity.
+    """Return LIN-005 only for evidence-backed suspicious sudo activity.
 
     Ordinary local successful sudo commands are intentionally benign.
     A candidate is produced when either:
