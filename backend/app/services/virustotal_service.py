@@ -70,6 +70,16 @@ def lookup_virustotal(
                 details={"http_status": 429},
             )
 
+        if response.status_code in {401, 403}:
+            return _failure_result(
+                indicator,
+                lookup_status="error",
+                details={
+                    "http_status": response.status_code,
+                    "error_type": "authentication_error",
+                },
+            )
+
         if response.status_code != 200:
             return _failure_result(
                 indicator,
