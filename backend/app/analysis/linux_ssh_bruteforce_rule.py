@@ -130,9 +130,14 @@ def _qualify_events(
             continue
 
         try:
-            canonical_ip = str(ip_address(normalized_ip))
+            parsed_normalized_ip = ip_address(normalized_ip)
         except ValueError:
             continue
+
+        if parsed_normalized_ip.is_unspecified:
+            continue
+
+        canonical_ip = str(parsed_normalized_ip)
 
         message = str(raw_event.get("MESSAGE") or event.get("message") or "").strip()
         match = _FAILED_AUTH_RE.match(message)
@@ -145,9 +150,14 @@ def _qualify_events(
             continue
 
         try:
-            evidence_ip = str(ip_address(match.group("source_ip")))
+            parsed_evidence_ip = ip_address(match.group("source_ip"))
         except ValueError:
             continue
+
+        if parsed_evidence_ip.is_unspecified:
+            continue
+
+        evidence_ip = str(parsed_evidence_ip)
 
         if evidence_ip != canonical_ip:
             continue
@@ -181,7 +191,7 @@ def _group_key(
         return (
             failure.device_id,
             failure.source_ip,
-            failure.target_user.casefold(),
+            failure.target_user,
         )
 
     return (
