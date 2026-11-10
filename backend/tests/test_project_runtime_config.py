@@ -24,5 +24,5 @@ def test_runtime_dependencies_are_declared():
     )
 
     assert "redis==" in requirements
-    assert "psycopg[binary]==" in requirements
+    assert "psycopg[binary]==3.2.13" in requirements
     assert "python-dotenv==" in requirements
