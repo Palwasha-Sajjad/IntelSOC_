@@ -2,6 +2,7 @@ import json
 from uuid import uuid4
 
 import pytest
+import redis
 from fastapi.testclient import TestClient
 
 from app.api.routes import events
@@ -24,9 +25,32 @@ class FakeRedis:
     def __init__(self):
         self.entries = []
 
-    def xadd(self, stream, fields):
-        self.entries.append((stream, fields))
-        return f"{len(self.entries)}-0".encode()
+    class Pipeline:
+        def __init__(self, client):
+            self.client = client
+            self.pending = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def xadd(self, stream, fields):
+            self.pending.append((stream, fields))
+            return self
+
+        def execute(self):
+            start = len(self.client.entries)
+            self.client.entries.extend(self.pending)
+            return [
+                f"{start + index + 1}-0".encode()
+                for index in range(len(self.pending))
+            ]
+
+    def pipeline(self, transaction=True):
+        assert transaction is True
+        return self.Pipeline(self)
 
     def close(self):
         pass
@@ -232,3 +256,29 @@ def test_approved_windows_telemetry_is_accepted(
     assert payload["raw_event"]["ProviderName"] == provider
 
     assert f"EventID={event_id}" in payload["message"]
+
+
+def test_windows_batch_queue_failure_is_all_or_nothing(monkeypatch):
+    class FailingRedis(FakeRedis):
+        class Pipeline(FakeRedis.Pipeline):
+            def execute(self):
+                raise redis.exceptions.ConnectionError("Redis unavailable")
+
+    failing = FailingRedis()
+
+    monkeypatch.setattr(
+        events.redis,
+        "Redis",
+        lambda **kwargs: failing,
+    )
+
+    records = [sample_record(), sample_record()]
+    records[1]["EventRecordID"] += 1
+
+    response = client.post(
+        "/api/v1/events/windows",
+        json=records,
+    )
+
+    assert response.status_code == 503
+    assert failing.entries == []
