@@ -75,7 +75,7 @@ def enrich_alert_with_virustotal(
             )
 
     if not indicator_events:
-        mark_alert_ti_processed(alert_id)
+        mark_alert_ti_processed(alert_id, provider="virustotal")
         return AlertTiSummary(
             alert_id=UUID(str(alert_id)),
             evidence_events=len(evidence_rows),
@@ -144,7 +144,7 @@ def enrich_alert_with_virustotal(
         error = "Transient TI lookup failure(s): " + ", ".join(
             transient_failures
         )
-        mark_alert_ti_failed(alert_id, error)
+        mark_alert_ti_failed(alert_id, error, provider="virustotal")
 
         return AlertTiSummary(
             alert_id=UUID(str(alert_id)),
@@ -156,7 +156,7 @@ def enrich_alert_with_virustotal(
             status="failed",
         )
 
-    mark_alert_ti_processed(alert_id)
+    mark_alert_ti_processed(alert_id, provider="virustotal")
 
     return AlertTiSummary(
         alert_id=UUID(str(alert_id)),
@@ -206,7 +206,7 @@ def enrich_alert_with_abuseipdb(
             )
 
     if not indicator_events:
-        mark_alert_ti_processed(alert_id)
+        mark_alert_ti_processed(alert_id, provider="abuseipdb")
         return AlertTiSummary(
             alert_id=UUID(str(alert_id)),
             evidence_events=len(evidence_rows),
@@ -275,7 +275,7 @@ def enrich_alert_with_abuseipdb(
         error = "Transient TI lookup failure(s): " + ", ".join(
             transient_failures
         )
-        mark_alert_ti_failed(alert_id, error)
+        mark_alert_ti_failed(alert_id, error, provider="abuseipdb")
 
         return AlertTiSummary(
             alert_id=UUID(str(alert_id)),
@@ -287,7 +287,7 @@ def enrich_alert_with_abuseipdb(
             status="failed",
         )
 
-    mark_alert_ti_processed(alert_id)
+    mark_alert_ti_processed(alert_id, provider="abuseipdb")
 
     return AlertTiSummary(
         alert_id=UUID(str(alert_id)),
