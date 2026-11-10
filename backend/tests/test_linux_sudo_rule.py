@@ -53,6 +53,7 @@ def test_remote_sudo_with_original_ip_evidence_is_detected():
     )
     candidate = detect_suspicious_sudo(event)
     assert candidate is not None
+    assert candidate.rule_id == "RULE-LIN-005"
     assert candidate.rule_id == RULE_ID
     assert candidate.severity == "medium"
     assert candidate.target_user == "socadmin"
