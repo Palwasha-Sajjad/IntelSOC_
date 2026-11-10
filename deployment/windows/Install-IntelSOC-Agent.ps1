@@ -1,9 +1,10 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$ServerHost = "Pareezyy.local",
     [string]$ServerIP = "192.168.1.6",
     [int]$ServerPort = 8445,
-    [string]$FluentBitVersion = "5.1.3"
+    [string]$FluentBitVersion = "5.1.3",
+    [switch]$MigrateExisting
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,6 +24,63 @@ function Require-Administrator {
 }
 
 Require-Administrator
+
+$BaseDir = "C:\ProgramData\IntelSOC"
+$ConfigDir = Join-Path $BaseDir "fluent-bit"
+$CertDir = Join-Path $BaseDir "certs"
+$StorageDir = Join-Path $ConfigDir "storage"
+$InstallDir = "C:\IntelSOC\FluentBit"
+$FluentBitExe = $null
+$ConfigPath = Join-Path $ConfigDir "windows.yaml"
+$CaSource = Join-Path $PSScriptRoot "intelsoc-caddy-root.crt"
+$CaPath = Join-Path $CertDir "intelsoc-caddy-root.crt"
+$ServiceName = "IntelSOC-FluentBit"
+
+# Existing endpoint identity must not be silently replaced or re-enrolled.
+$existingService = Get-Service $ServiceName -ErrorAction SilentlyContinue
+$existingConfig = Test-Path $ConfigPath
+$existingInstall = $existingService -or $existingConfig
+
+if ($existingInstall -and -not $MigrateExisting) {
+    throw "Existing IntelSOC Windows agent detected. Nothing changed. Inspect it first, then rerun with -MigrateExisting."
+}
+
+$existingEnrollment = $null
+if ($existingConfig) {
+    $existingText = Get-Content $ConfigPath -Raw -ErrorAction Stop
+    $keyMatch = [regex]::Match(
+        $existingText,
+        '(?m)^\s*-\s*"X-IntelSOC-Key\s+([^"]+)"\s*$'
+    )
+    $idMatch = [regex]::Match(
+        $existingText,
+        '(?m)^\s*-\s*"X-Device-ID\s+([^"]+)"\s*$'
+    )
+    if ($keyMatch.Success -xor $idMatch.Success) {
+        throw "Partial existing IntelSOC enrollment found. Restore/repair it before migration."
+    }
+    if ($keyMatch.Success -and $idMatch.Success) {
+        $existingEnrollment = [pscustomobject]@{
+            ingest_key = $keyMatch.Groups[1].Value.Trim()
+            device_id = $idMatch.Groups[1].Value.Trim()
+        }
+    }
+}
+
+$BackupDir = $null
+if ($existingInstall) {
+    $BackupDir = Join-Path $env:ProgramData (
+        "IntelSOC\backups\agent-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+    )
+    New-Item -ItemType Directory -Path $BackupDir -Force | Out-Null
+    if ($existingConfig) {
+        Copy-Item $ConfigPath (Join-Path $BackupDir "windows.yaml") -Force
+    }
+    if (Test-Path $CaPath) {
+        Copy-Item $CaPath (Join-Path $BackupDir "intelsoc-caddy-root.crt") -Force
+    }
+    Write-Host "Existing IntelSOC configuration backed up to: $BackupDir"
+}
 
 Write-Step "Configuring Windows audit telemetry policies"
 
@@ -48,17 +106,6 @@ Set-ItemProperty -Path $AuditKey -Name "ProcessCreationIncludeCmdLine_Enabled" -
 $ScriptBlockKey = "HKLM:\Software\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging"
 New-Item -Path $ScriptBlockKey -Force | Out-Null
 Set-ItemProperty -Path $ScriptBlockKey -Name "EnableScriptBlockLogging" -Type DWord -Value 1
-
-$BaseDir = "C:\ProgramData\IntelSOC"
-$ConfigDir = Join-Path $BaseDir "fluent-bit"
-$CertDir = Join-Path $BaseDir "certs"
-$StorageDir = Join-Path $ConfigDir "storage"
-$InstallDir = "C:\IntelSOC\FluentBit"
-$FluentBitExe = $null
-$ConfigPath = Join-Path $ConfigDir "windows.yaml"
-$CaSource = Join-Path $PSScriptRoot "intelsoc-caddy-root.crt"
-$CaPath = Join-Path $CertDir "intelsoc-caddy-root.crt"
-$ServiceName = "IntelSOC-FluentBit"
 
 Write-Step "Checking deployment bundle"
 if (-not (Test-Path $CaSource)) {
@@ -106,47 +153,40 @@ finally {
     $handler.Dispose()
 }
 
-Write-Step "Enrolling this Windows device"
-$secureToken = Read-Host "IntelSOC enrollment token" -AsSecureString
-$ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
-try {
-    $enrollmentToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
+if ($existingEnrollment) {
+    Write-Step "Reusing existing IntelSOC device identity"
+    $enrollment = $existingEnrollment
 }
-finally {
-    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
-}
+else {
+    Write-Step "Enrolling this Windows device"
+    $secureToken = Read-Host "IntelSOC enrollment token" -AsSecureString
+    $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
+    try { $enrollmentToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) }
+    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
 
-$payload = @{
-    hostname = $env:COMPUTERNAME
-    platform = "windows"
-} | ConvertTo-Json -Compress
-
-$handler = New-Object System.Net.Http.HttpClientHandler
-$handler.CheckCertificateRevocationList = $false
-$client = New-Object System.Net.Http.HttpClient($handler)
-try {
-    $client.DefaultRequestHeaders.Add("X-IntelSOC-Enrollment-Token", $enrollmentToken)
-    $content = New-Object System.Net.Http.StringContent(
-        $payload,
-        [Text.Encoding]::UTF8,
-        "application/json"
-    )
-    $uri = "https://${ServerHost}:$ServerPort/api/v1/devices/enroll"
-    $response = $client.PostAsync($uri, $content).GetAwaiter().GetResult()
-    $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-    if (-not $response.IsSuccessStatusCode) {
-        throw "Enrollment failed: HTTP $([int]$response.StatusCode) $body"
+    $payload = @{ hostname = $env:COMPUTERNAME; platform = "windows" } | ConvertTo-Json -Compress
+    $handler = New-Object System.Net.Http.HttpClientHandler
+    $handler.CheckCertificateRevocationList = $false
+    $client = New-Object System.Net.Http.HttpClient($handler)
+    try {
+        $client.DefaultRequestHeaders.Add("X-IntelSOC-Enrollment-Token", $enrollmentToken)
+        $content = New-Object System.Net.Http.StringContent($payload,[Text.Encoding]::UTF8,"application/json")
+        $uri = "https://${ServerHost}:$ServerPort/api/v1/devices/enroll"
+        $response = $client.PostAsync($uri, $content).GetAwaiter().GetResult()
+        $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        if (-not $response.IsSuccessStatusCode) {
+            throw "Enrollment failed: HTTP $([int]$response.StatusCode) $body"
+        }
+        $enrollment = $body | ConvertFrom-Json
     }
-    $enrollment = $body | ConvertFrom-Json
+    finally {
+        $client.Dispose()
+        $handler.Dispose()
+        $enrollmentToken = $null
+    }
 }
-finally {
-    $client.Dispose()
-    $handler.Dispose()
-    $enrollmentToken = $null
-}
-
 if (-not $enrollment.device_id -or -not $enrollment.ingest_key) {
-    throw "Enrollment response did not contain device_id and ingest_key."
+    throw "Enrollment did not provide both device_id and ingest_key."
 }
 
 Write-Step "Installing Fluent Bit $FluentBitVersion"
@@ -236,7 +276,7 @@ pipeline:
       channels: Security
       interval_sec: 1
       read_existing_events: false
-      event_query: '*[System[(EventID=4624 or EventID=4625 or EventID=4740 or EventID=4648 or EventID=4688 or EventID=4698 or EventID=4702 or EventID=4720 or EventID=4722 or EventID=4732 or EventID=1102)]]'
+      event_query: '*[System[(EventID=4624 or EventID=4625 or EventID=4740 or EventID=4648 or EventID=4688 or EventID=4698 or EventID=4702 or EventID=4720 or EventID=4722 or EventID=4723 or EventID=4725 or EventID=4726 or EventID=4732 or EventID=1102)]]'
       db: C:\\ProgramData\\IntelSOC\\fluent-bit\\security.db
       storage.type: filesystem
 
@@ -271,6 +311,12 @@ Set-Content -Path $ConfigPath -Value $config -Encoding UTF8
 # Restrict the config because it contains the endpoint authentication material.
 icacls $ConfigPath /inheritance:r | Out-Null
 icacls $ConfigPath /grant:r "SYSTEM:F" "Administrators:F" | Out-Null
+
+Write-Step "Validating Fluent Bit configuration"
+& $FluentBitExe --dry-run -c $ConfigPath
+if ($LASTEXITCODE -ne 0) {
+    throw "Fluent Bit configuration validation failed. Existing service was not replaced."
+}
 
 Write-Step "Installing IntelSOC Fluent Bit Windows service"
 $existing = Get-Service $ServiceName -ErrorAction SilentlyContinue

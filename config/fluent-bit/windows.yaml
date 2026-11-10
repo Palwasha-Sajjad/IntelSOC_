@@ -1,4 +1,4 @@
-﻿service:
+service:
   flush: 1
   daemon: off
   log_level: info
@@ -34,7 +34,7 @@ pipeline:
       channels: Security
       interval_sec: 1
       read_existing_events: false
-      event_query: '*[System[(EventID=4624 or EventID=4625 or EventID=4740 or EventID=4648 or EventID=4688 or EventID=4698 or EventID=4702 or EventID=4720 or EventID=4722 or EventID=4732 or EventID=1102)]]'
+      event_query: '*[System[(EventID=4624 or EventID=4625 or EventID=4740 or EventID=4648 or EventID=4688 or EventID=4698 or EventID=4702 or EventID=4720 or EventID=4722 or EventID=4723 or EventID=4725 or EventID=4726 or EventID=4732 or EventID=1102)]]'
       db: ${INTELSOC_FLUENTBIT_SECURITY_DB}
       storage.type: filesystem
 

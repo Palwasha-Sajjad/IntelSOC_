@@ -1,3 +1,4 @@
+# LEGACY TEST-ONLY CONFIG. Do not deploy to endpoints; use deployment/windows/Install-IntelSOC-Agent.ps1.
 service:
   flush: 1
   daemon: off
