@@ -60,6 +60,11 @@ from app.analysis.security_log_cleared_rule import (
     RULE_ID as SECURITY_LOG_CLEARED_RULE_ID,
     detect_security_log_cleared,
 )
+from app.analysis.linux_ssh_bruteforce_rule import (
+    RULE_ID as LINUX_SSH_BRUTEFORCE_RULE_ID,
+    DEFAULT_WINDOW as LINUX_SSH_BRUTEFORCE_WINDOW,
+    evaluate_ssh_bruteforce,
+)
 from app.core.config import get_postgres_config
 from app.services.alert_service import (
     create_alert_for_detection,
@@ -327,6 +332,192 @@ def analyze_once(
 
         raise
 
+
+
+def fetch_unprocessed_linux_ssh_failures(
+    *, limit: int = BATCH_SIZE,
+) -> list[dict[str, Any]]:
+    """Return Linux SSH events not yet processed by LIN-001."""
+
+    with psycopg.connect(
+        **get_postgres_config(),
+        connect_timeout=5,
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    e.event_id,
+                    e.device_id,
+                    e.event_time,
+                    e.src_ip,
+                    e.message,
+                    e.raw_event
+                FROM security_events AS e
+                LEFT JOIN event_rule_analysis_state AS s
+                  ON s.event_id = e.event_id
+                 AND s.rule_id = %s
+                WHERE e.source = 'linux_journald'
+                  AND e.event_type = 'linux_ssh_event'
+                  AND e.device_id IS NOT NULL
+                  AND e.src_ip IS NOT NULL
+                  AND (s.event_id IS NULL OR s.status = 'failed')
+                ORDER BY e.event_time ASC, e.event_id ASC
+                LIMIT %s
+                """,
+                (LINUX_SSH_BRUTEFORCE_RULE_ID, limit),
+            )
+            rows = cursor.fetchall()
+
+    return [
+        {
+            "event_id": str(event_id),
+            "device_id": str(device_id),
+            "event_time": event_time,
+            "src_ip": str(src_ip),
+            "message": message,
+            "raw_event": raw_event,
+        }
+        for event_id, device_id, event_time, src_ip, message, raw_event in rows
+    ]
+
+
+def fetch_linux_ssh_failure_history(
+    *,
+    start_time,
+    end_time,
+) -> list[dict[str, Any]]:
+    """Return bounded SSH evidence needed for LIN-001 rolling evaluation."""
+
+    lookback_start = start_time - LINUX_SSH_BRUTEFORCE_WINDOW
+
+    with psycopg.connect(
+        **get_postgres_config(),
+        connect_timeout=5,
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    event_id,
+                    device_id,
+                    event_time,
+                    src_ip,
+                    message,
+                    raw_event
+                FROM security_events
+                WHERE source = 'linux_journald'
+                  AND event_type = 'linux_ssh_event'
+                  AND device_id IS NOT NULL
+                  AND src_ip IS NOT NULL
+                  AND event_time >= %s
+                  AND event_time <= %s
+                ORDER BY event_time ASC, event_id ASC
+                """,
+                (lookback_start, end_time),
+            )
+            rows = cursor.fetchall()
+
+    return [
+        {
+            "event_id": str(event_id),
+            "device_id": str(device_id),
+            "event_time": event_time,
+            "src_ip": str(src_ip),
+            "message": message,
+            "raw_event": raw_event,
+        }
+        for event_id, device_id, event_time, src_ip, message, raw_event in rows
+    ]
+
+
+def analyze_linux_ssh_bruteforce_once(
+    *, limit: int = BATCH_SIZE,
+) -> dict[str, int]:
+    """Run LIN-001 with bounded history and per-rule replay protection."""
+
+    pending = fetch_unprocessed_linux_ssh_failures(limit=limit)
+
+    if not pending:
+        return {
+            "events_processed": 0,
+            "detections_created": 0,
+            "detections_reused": 0,
+            "alerts_created": 0,
+            "alerts_reused": 0,
+            "incidents_created": 0,
+            "incidents_reused": 0,
+            "events_failed": 0,
+        }
+
+    batch_event_ids = {event["event_id"] for event in pending}
+    start_time = min(event["event_time"] for event in pending)
+    end_time = max(event["event_time"] for event in pending)
+
+    try:
+        history = fetch_linux_ssh_failure_history(
+            start_time=start_time,
+            end_time=end_time,
+        )
+        candidates = evaluate_ssh_bruteforce(history)
+
+        result = {
+            "events_processed": 0,
+            "detections_created": 0,
+            "detections_reused": 0,
+            "alerts_created": 0,
+            "alerts_reused": 0,
+            "incidents_created": 0,
+            "incidents_reused": 0,
+            "events_failed": 0,
+        }
+
+        for candidate in candidates:
+            if (
+                not candidate.event_ids
+                or candidate.event_ids[-1] not in batch_event_ids
+            ):
+                continue
+
+            detection = persist_detection(candidate)
+            result[
+                "detections_created"
+                if detection.created
+                else "detections_reused"
+            ] += 1
+
+            alert = create_alert_for_detection(detection.detection_id)
+            result[
+                "alerts_created" if alert.created else "alerts_reused"
+            ] += 1
+
+            incident = correlate_alert_to_incident(alert.alert_id)
+            result[
+                "incidents_created"
+                if incident.created
+                else "incidents_reused"
+            ] += 1
+
+        for event in pending:
+            mark_event_analysis_processed(
+                UUID(event["event_id"]),
+                LINUX_SSH_BRUTEFORCE_RULE_ID,
+            )
+            result["events_processed"] += 1
+
+        return result
+
+    except Exception as error:
+        for event in pending:
+            try:
+                mark_event_analysis_failed(
+                    UUID(event["event_id"]),
+                    str(error),
+                    LINUX_SSH_BRUTEFORCE_RULE_ID,
+                )
+            except Exception:
+                pass
+        raise
 
 
 def fetch_unprocessed_security_log_clears(
@@ -1464,6 +1655,7 @@ def main() -> None:
     # New rules will register here with independent runners and state.
     rules = (
         RuleRunner(RULE_ID, analyze_once),
+        RuleRunner(LINUX_SSH_BRUTEFORCE_RULE_ID, analyze_linux_ssh_bruteforce_once),
         RuleRunner(SECURITY_LOG_CLEARED_RULE_ID, analyze_security_log_clears_once),
         RuleRunner(PRIVILEGED_GROUP_RULE_ID, analyze_privileged_group_once),
         RuleRunner(ACCOUNT_LIFECYCLE_RULE_ID, analyze_account_lifecycle_once),
