@@ -28,7 +28,8 @@ def sample_event():
 # TEST 1: Valid events should be queued
 def test_valid_event(monkeypatch):
     fake_redis = MagicMock()
-    fake_redis.xadd.return_value = b"12345-0"
+    pipe = fake_redis.pipeline.return_value.__enter__.return_value
+    pipe.execute.return_value = [b"12345-0"]
 
     monkeypatch.setattr(
         events.redis,
@@ -45,9 +46,10 @@ def test_valid_event(monkeypatch):
     assert response.json()["status"] == "queued"
     assert response.json()["stream_id"] == "12345-0"
 
-    fake_redis.xadd.assert_called_once()
+    fake_redis.pipeline.assert_called_once_with(transaction=True)
+    pipe.xadd.assert_called_once()
 
-    args, kwargs = fake_redis.xadd.call_args
+    args, kwargs = pipe.xadd.call_args
 
     assert args[0] == "intelsoc:events"
 
@@ -75,8 +77,8 @@ def test_invalid_event():
 # TEST 3: Redis failure must be handled
 def test_redis_unavailable(monkeypatch):
     fake_redis = MagicMock()
-
-    fake_redis.xadd.side_effect = (
+    pipe = fake_redis.pipeline.return_value.__enter__.return_value
+    pipe.execute.side_effect = (
         redis.exceptions.ConnectionError("Redis unavailable")
     )
 
