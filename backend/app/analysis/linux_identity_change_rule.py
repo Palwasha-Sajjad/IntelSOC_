@@ -28,6 +28,10 @@ _FIELD_RE = re.compile(
     r'(?P<name>[A-Za-z0-9_]+)=(?:"(?P<quoted>[^"]*)"|(?P<bare>\S+))'
 )
 
+_AUDIT_SUCCESS_RE = re.compile(
+    r"(?i)(?:^|[\\s'])res=success(?:$|[\\s'])"
+)
+
 
 def detect_linux_identity_change(
     event: Mapping[str, Any],
@@ -71,10 +75,11 @@ def detect_linux_identity_change(
     fields = _parse_fields(match.group("body"))
 
     if record_type in _ACCOUNT_TYPES:
-        if str(fields.get("res") or "").casefold() != "success":
+        body = match.group("body")
+        if _AUDIT_SUCCESS_RE.search(body) is None:
             return None
 
-        account = _clean_identity(fields.get("acct"))
+        account = _account_subject(fields)
         grouping_basis = (
             "device_audit_type_account"
             if account is not None
@@ -140,10 +145,23 @@ def _parse_fields(body: str) -> dict[str, str]:
 
 
 def _clean_identity(value: Any) -> str | None:
-    text = str(value or "").strip()
-    if not text or text in {"?", "-", "(unknown)"}:
+    text = str(value or "").strip().strip("'")
+    if (
+        not text
+        or text in {"?", "-", "(unknown)"}
+        or text.startswith("unknown(")
+    ):
         return None
     return text
+
+
+def _account_subject(fields: Mapping[str, str]) -> str | None:
+    # Synthetic/portable audit records often expose acct=, while Ubuntu's
+    # account-management records commonly append the resolved subject as ID=.
+    account = _clean_identity(fields.get("acct"))
+    if account is not None:
+        return account
+    return _clean_identity(fields.get("ID"))
 
 
 def _actor_from_audit_fields(
