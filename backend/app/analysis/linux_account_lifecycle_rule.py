@@ -84,7 +84,10 @@ def detect_linux_account_lifecycle(
 
     # USER_MGMT can represent a group-membership operation. Those records
     # belong to LIN-004 and must not create a second account-lifecycle alert.
-    if record_type == "USER_MGMT" and _explicit_group(fields) is not None:
+    if record_type == "USER_MGMT" and (
+        _explicit_group(fields) is not None
+        or _looks_like_group_operation(body)
+    ):
         return None
 
     account = _account_subject(fields)
@@ -145,3 +148,16 @@ def _explicit_group(fields: Mapping[str, str]) -> str | None:
             if group is not None:
                 return group
     return None
+
+
+def _looks_like_group_operation(body: str) -> bool:
+    lowered = body.casefold()
+    return any(
+        marker in lowered
+        for marker in (
+            "group",
+            "grp",
+            "add-shadow-group",
+            "remove-shadow-group",
+        )
+    )
