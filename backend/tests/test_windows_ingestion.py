@@ -265,11 +265,17 @@ def test_windows_batch_queue_failure_is_all_or_nothing(monkeypatch):
                 raise redis.exceptions.ConnectionError("Redis unavailable")
 
     failing = FailingRedis()
+    last_seen = []
 
     monkeypatch.setattr(
         events.redis,
         "Redis",
         lambda **kwargs: failing,
+    )
+    monkeypatch.setattr(
+        events,
+        "update_device_last_seen",
+        lambda device_id: last_seen.append(device_id),
     )
 
     records = [sample_record(), sample_record()]
@@ -282,3 +288,4 @@ def test_windows_batch_queue_failure_is_all_or_nothing(monkeypatch):
 
     assert response.status_code == 503
     assert failing.entries == []
+    assert last_seen == []
