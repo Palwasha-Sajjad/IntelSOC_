@@ -45,3 +45,11 @@ def test_redis_runtime_has_bounded_network_timeouts():
 
     assert config["socket_connect_timeout"] == 5
     assert config["socket_timeout"] == 5
+
+
+def test_ti_worker_prefers_project_env_file():
+    content = (
+        ROOT / "backend" / "app" / "workers" / "ti_worker.py"
+    ).read_text(encoding="utf-8-sig")
+
+    assert 'load_dotenv(ROOT / ".env", override=True)' in content
