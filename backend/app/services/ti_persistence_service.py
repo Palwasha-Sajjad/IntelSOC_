@@ -45,6 +45,9 @@ def get_alert_evidence(
     """Return only the events that actually contributed to an alert."""
 
     alert_id = UUID(str(alert_id))
+    provider = str(provider or "").strip().lower()
+    if provider not in {"virustotal", "abuseipdb", "otx"}:
+        raise ValueError("unsupported TI provider")
 
     with psycopg.connect(
         **get_postgres_config(),
@@ -253,11 +256,13 @@ def link_alert_indicator(
 
 def mark_alert_ti_processed(
     alert_id: UUID | str,
+    provider: str = "virustotal",
 ) -> None:
     """Record successful TI completion for one alert."""
 
     _upsert_alert_state(
         alert_id=alert_id,
+        provider=provider,
         status="processed",
         error=None,
     )
@@ -266,11 +271,13 @@ def mark_alert_ti_processed(
 def mark_alert_ti_failed(
     alert_id: UUID | str,
     error: str,
+    provider: str = "virustotal",
 ) -> None:
     """Record one failed TI attempt without losing retry state."""
 
     _upsert_alert_state(
         alert_id=alert_id,
+        provider=provider,
         status="failed",
         error=str(error).strip()[:4000],
     )
@@ -279,6 +286,7 @@ def mark_alert_ti_failed(
 def _upsert_alert_state(
     *,
     alert_id: UUID | str,
+    provider: str,
     status: str,
     error: str | None,
 ) -> None:
@@ -293,6 +301,7 @@ def _upsert_alert_state(
                 """
                 INSERT INTO alert_ti_analysis_state (
                     alert_id,
+                    provider,
                     status,
                     attempts,
                     last_error,
@@ -302,12 +311,13 @@ def _upsert_alert_state(
                 VALUES (
                     %s,
                     %s,
+                    %s,
                     1,
                     %s,
                     CASE WHEN %s = 'processed' THEN NOW() ELSE NULL END,
                     NOW()
                 )
-                ON CONFLICT (alert_id)
+                ON CONFLICT (alert_id, provider)
                 DO UPDATE SET
                     status = EXCLUDED.status,
                     attempts = alert_ti_analysis_state.attempts + 1,
@@ -320,6 +330,7 @@ def _upsert_alert_state(
                 """,
                 (
                     alert_id,
+                    provider,
                     status,
                     error,
                     status,
