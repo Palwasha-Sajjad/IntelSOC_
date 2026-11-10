@@ -45,9 +45,6 @@ def get_alert_evidence(
     """Return only the events that actually contributed to an alert."""
 
     alert_id = UUID(str(alert_id))
-    provider = str(provider or "").strip().lower()
-    if provider not in {"virustotal", "abuseipdb", "otx"}:
-        raise ValueError("unsupported TI provider")
 
     with psycopg.connect(
         **get_postgres_config(),
@@ -291,6 +288,9 @@ def _upsert_alert_state(
     error: str | None,
 ) -> None:
     alert_id = UUID(str(alert_id))
+    provider = str(provider or "").strip().lower()
+    if provider not in {"virustotal", "abuseipdb", "otx"}:
+        raise ValueError("unsupported TI provider")
 
     with psycopg.connect(
         **get_postgres_config(),
