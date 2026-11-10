@@ -4,7 +4,7 @@ $Root = $PSScriptRoot
 $Backend = Join-Path $Root "backend"
 $Python = Join-Path $Backend ".venv\Scripts\python.exe"
 $CaddyConfig = Join-Path $Root "config\caddy\Caddyfile"
-$DockerDesktop = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+$DockerDesktop = "C:\Program Files\Docker\Docker Desktop.exe"
 
 $env:INTELSOC_GATEWAY_HOST = "Pareezyy.local"
 
@@ -93,29 +93,51 @@ else {
 }
 
 # --------------------------------------------------
-# 4. Event worker
+# 4. Event storage worker
 # --------------------------------------------------
 
-$Worker = Get-CimInstance Win32_Process |
+$EventWorker = Get-CimInstance Win32_Process |
 Where-Object {
     $_.CommandLine -match "app\.workers\.event_worker"
 }
 
-if (-not $Worker) {
+if (-not $EventWorker) {
     Start-Process `
         -FilePath $Python `
         -ArgumentList "-m app.workers.event_worker" `
         -WorkingDirectory $Backend `
         -WindowStyle Minimized
 
-    Write-Host "IntelSOC Worker: STARTED" -ForegroundColor Green
+    Write-Host "Event Worker: STARTED" -ForegroundColor Green
 }
 else {
-    Write-Host "IntelSOC Worker: already running" -ForegroundColor DarkGreen
+    Write-Host "Event Worker: already running" -ForegroundColor DarkGreen
 }
 
 # --------------------------------------------------
-# 5. Caddy
+# 5. Analysis worker
+# --------------------------------------------------
+
+$AnalysisWorker = Get-CimInstance Win32_Process |
+Where-Object {
+    $_.CommandLine -match "app\.workers\.analysis_worker"
+}
+
+if (-not $AnalysisWorker) {
+    Start-Process `
+        -FilePath $Python `
+        -ArgumentList "-m app.workers.analysis_worker" `
+        -WorkingDirectory $Backend `
+        -WindowStyle Minimized
+
+    Write-Host "Analysis Worker: STARTED" -ForegroundColor Green
+}
+else {
+    Write-Host "Analysis Worker: already running" -ForegroundColor DarkGreen
+}
+
+# --------------------------------------------------
+# 6. Caddy
 # --------------------------------------------------
 
 $CaddyProcess = Get-Process caddy -ErrorAction SilentlyContinue
@@ -134,7 +156,7 @@ else {
 }
 
 # --------------------------------------------------
-# 6. Health checks
+# 7. Health checks
 # --------------------------------------------------
 
 Start-Sleep -Seconds 3

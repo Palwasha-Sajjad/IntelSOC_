@@ -21,7 +21,7 @@ ForEach-Object {
 
 Write-Host "FastAPI: STOPPED" -ForegroundColor Green
 
-# Worker
+# Event storage worker
 Get-CimInstance Win32_Process |
 Where-Object {
     $_.CommandLine -match "app\.workers\.event_worker"
@@ -30,7 +30,18 @@ ForEach-Object {
     Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host "Worker: STOPPED" -ForegroundColor Green
+Write-Host "Event Worker: STOPPED" -ForegroundColor Green
+
+# Analysis worker
+Get-CimInstance Win32_Process |
+Where-Object {
+    $_.CommandLine -match "app\.workers\.analysis_worker"
+} |
+ForEach-Object {
+    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host "Analysis Worker: STOPPED" -ForegroundColor Green
 
 # PostgreSQL + Redis
 Set-Location $Root

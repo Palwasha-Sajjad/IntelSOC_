@@ -1,5 +1,8 @@
-# Known-compatible versions for the first IntelSOC backend milestone.
+# Known-compatible versions for the IntelSOC backend.
 fastapi==0.128.2
 uvicorn==0.48.0
 pytest==9.0.2
 httpx==0.28.1
+redis==5.2.1
+psycopg[binary]==3.2.3
+python-dotenv==1.0.1
