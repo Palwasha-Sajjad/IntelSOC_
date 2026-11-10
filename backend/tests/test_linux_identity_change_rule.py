@@ -167,3 +167,40 @@ def test_malformed_or_untrusted_event_shape_is_ignored():
 
     event = audit_event("not-an-audit-record")
     assert detect_linux_identity_change(event) is None
+
+
+def test_native_ubuntu_add_user_record_is_detected():
+    event = audit_event(
+        'type=ADD_USER msg=audit(1794324376.841:992): '
+        'pid=2933 uid=0 auid=1000 ses=28 subj=unconfined '
+        'msg=\'op=adding home directory id=1001 exe="/usr/sbin/useradd" '
+        'hostname=intelsoc-linux-agent addr=? terminal=pts/0 res=success\''
+        'UID="root" AUID="socadmin" ID="intelsoc_l4user"'
+    )
+    candidate = detect_linux_identity_change(event)
+    assert candidate is not None
+    assert candidate.severity == "high"
+    assert candidate.target_user == "intelsoc_l4user"
+
+
+def test_native_ubuntu_group_record_uses_id_subject():
+    event = audit_event(
+        'type=ADD_GROUP msg=audit(1794324376.663:975): '
+        'pid=2925 uid=0 auid=1000 ses=28 subj=unconfined '
+        'msg=\'op=adding group to /etc/group id=1001 exe="/usr/sbin/groupadd" '
+        'hostname=intelsoc-linux-agent addr=? terminal=pts/0 res=success\''
+        'UID="root" AUID="socadmin" ID="intelsoc_l4grp"'
+    )
+    candidate = detect_linux_identity_change(event)
+    assert candidate is not None
+    assert candidate.target_user == "intelsoc_l4grp"
+
+
+def test_native_ubuntu_failed_record_is_ignored():
+    event = audit_event(
+        'type=DEL_USER msg=audit(1794324377.028:1017): '
+        'pid=2952 uid=0 auid=1000 '
+        'msg=\'op=deleting user entries res=failed\''
+        'UID="root" AUID="socadmin" ID="intelsoc_l4user"'
+    )
+    assert detect_linux_identity_change(event) is None
