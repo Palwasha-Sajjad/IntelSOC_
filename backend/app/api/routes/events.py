@@ -21,30 +21,49 @@ router = APIRouter(
 STREAM_NAME = "intelsoc:events"
 
 
-@router.post("/events", status_code=202)
-def receive_event(event: SecurityEvent):
+def _require_device_platform(device: dict, expected: str) -> None:
+    """Reject cross-platform use of a registered endpoint identity."""
+
+    if str(device.get("platform") or "").strip().casefold() != expected:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Device is not registered as {expected}",
+        )
+
+
+def _queue_events(events: list[SecurityEvent]) -> list[bytes]:
+    """Queue one validated batch atomically to avoid partial acceptance."""
+
     client = redis.Redis(**get_redis_config())
 
     try:
-        stream_id = client.xadd(
-            STREAM_NAME,
-            {"payload": event.model_dump_json()},
-        )
+        with client.pipeline(transaction=True) as pipe:
+            for event in events:
+                pipe.xadd(
+                    STREAM_NAME,
+                    {"payload": event.model_dump_json()},
+                )
+            return pipe.execute()
 
-        return {
-            "status": "queued",
-            "event_id": str(event.event_id),
-            "stream_id": stream_id.decode(),
-        }
-
-    except redis.RedisError:
+    except redis.RedisError as error:
         raise HTTPException(
             status_code=503,
             detail="Event queue unavailable",
-        )
+        ) from error
 
     finally:
         client.close()
+
+
+@router.post("/events", status_code=202)
+def receive_event(event: SecurityEvent):
+    stream_ids = _queue_events([event])
+
+    return {
+        "status": "queued",
+        "event_id": str(event.event_id),
+        "stream_id": stream_ids[0].decode(),
+    }
 
 
 @router.post("/events/windows", status_code=202)
@@ -53,6 +72,8 @@ def receive_windows_events(
     device: dict = Depends(verify_ingest_device),
 ):
     """Receive raw Windows events from Fluent Bit."""
+
+    _require_device_platform(device, "windows")
 
     if not records:
         raise HTTPException(
@@ -77,9 +98,8 @@ def receive_windows_events(
             detail=f"Invalid Windows event: {error}",
         ) from error
 
-    for event in normalized_events:
-        receive_event(event)
-       
+    _queue_events(normalized_events)
+
     update_device_last_seen(device["device_id"])
 
     return {
@@ -94,6 +114,8 @@ def receive_linux_events(
     device: dict = Depends(verify_ingest_device),
 ):
     """Receive raw Linux journal events from Fluent Bit."""
+
+    _require_device_platform(device, "linux")
 
     if not records:
         raise HTTPException(
@@ -125,8 +147,8 @@ def receive_linux_events(
             detail=f"Invalid Linux event: {error}",
         ) from error
 
-    for event in normalized_events:
-        receive_event(event)
+    _queue_events(normalized_events)
+
     update_device_last_seen(device["device_id"])
     
     return {
