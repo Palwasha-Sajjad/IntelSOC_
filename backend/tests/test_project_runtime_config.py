@@ -26,3 +26,13 @@ def test_runtime_dependencies_are_declared():
     assert "redis==" in requirements
     assert "psycopg[binary]==3.2.13" in requirements
     assert "python-dotenv==" in requirements
+
+
+
+def test_redis_runtime_has_bounded_network_timeouts():
+    from app.core.config import get_redis_config
+
+    config = get_redis_config()
+
+    assert config["socket_connect_timeout"] == 5
+    assert config["socket_timeout"] == 5
