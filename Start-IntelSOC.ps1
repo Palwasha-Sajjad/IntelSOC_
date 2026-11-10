@@ -8,7 +8,8 @@ $DockerDesktop = "C:\Program Files\Docker\Docker Desktop.exe"
 
 $env:INTELSOC_GATEWAY_HOST = "Pareezyy.local"
 
-Write-Host "`n=== Starting IntelSOC ===" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "=== Starting IntelSOC ===" -ForegroundColor Cyan
 
 # --------------------------------------------------
 # 1. Docker engine
@@ -80,11 +81,7 @@ Where-Object {
 }
 
 if (-not $FastAPI) {
-    Start-Process `
-        -FilePath $Python `
-        -ArgumentList "-m uvicorn app.main:app --host 127.0.0.1 --port 8000" `
-        -WorkingDirectory $Backend `
-        -WindowStyle Minimized
+    Start-Process -FilePath $Python -ArgumentList "-m uvicorn app.main:app --host 127.0.0.1 --port 8000" -WorkingDirectory $Backend -WindowStyle Minimized
 
     Write-Host "FastAPI: STARTED" -ForegroundColor Green
 }
@@ -102,11 +99,7 @@ Where-Object {
 }
 
 if (-not $EventWorker) {
-    Start-Process `
-        -FilePath $Python `
-        -ArgumentList "-m app.workers.event_worker" `
-        -WorkingDirectory $Backend `
-        -WindowStyle Minimized
+    Start-Process -FilePath $Python -ArgumentList "-m app.workers.event_worker" -WorkingDirectory $Backend -WindowStyle Minimized
 
     Write-Host "Event Worker: STARTED" -ForegroundColor Green
 }
@@ -124,11 +117,7 @@ Where-Object {
 }
 
 if (-not $AnalysisWorker) {
-    Start-Process `
-        -FilePath $Python `
-        -ArgumentList "-m app.workers.analysis_worker" `
-        -WorkingDirectory $Backend `
-        -WindowStyle Minimized
+    Start-Process -FilePath $Python -ArgumentList "-m app.workers.analysis_worker" -WorkingDirectory $Backend -WindowStyle Minimized
 
     Write-Host "Analysis Worker: STARTED" -ForegroundColor Green
 }
@@ -137,17 +126,39 @@ else {
 }
 
 # --------------------------------------------------
-# 6. Caddy
+# 6. Threat Intelligence worker
+# --------------------------------------------------
+
+$TIWorker = Get-CimInstance Win32_Process |
+Where-Object {
+    $_.CommandLine -match "app\.workers\.ti_worker"
+}
+
+if (-not $TIWorker) {
+    $TIWorkerProcess = Start-Process -FilePath $Python -ArgumentList "-m app.workers.ti_worker" -WorkingDirectory $Backend -WindowStyle Minimized -PassThru
+
+    # The TI worker validates its provider configuration at startup.
+    # Give it a moment to fail fast instead of reporting a false STARTED state.
+    Start-Sleep -Seconds 1
+
+    if ($TIWorkerProcess.HasExited) {
+        throw "TI Worker exited during startup. Verify VT_API_KEY and ABUSEIPDB_KEY in the root .env and check for stale session environment variables."
+    }
+
+    Write-Host "TI Worker: STARTED" -ForegroundColor Green
+}
+else {
+    Write-Host "TI Worker: already running" -ForegroundColor DarkGreen
+}
+
+# --------------------------------------------------
+# 7. Caddy
 # --------------------------------------------------
 
 $CaddyProcess = Get-Process caddy -ErrorAction SilentlyContinue
 
 if (-not $CaddyProcess) {
-    Start-Process `
-        -FilePath "caddy" `
-        -ArgumentList "run --config `"$CaddyConfig`"" `
-        -WorkingDirectory $Root `
-        -WindowStyle Minimized
+    Start-Process -FilePath "caddy" -ArgumentList "run", "--config", $CaddyConfig -WorkingDirectory $Root -WindowStyle Minimized
 
     Write-Host "Caddy: STARTED" -ForegroundColor Green
 }
@@ -156,21 +167,30 @@ else {
 }
 
 # --------------------------------------------------
-# 7. Health checks
+# 8. Health checks
 # --------------------------------------------------
 
 Start-Sleep -Seconds 3
 
-Write-Host "`n=== IntelSOC Health ===" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "=== IntelSOC Health ===" -ForegroundColor Cyan
 
-$fastApiHealth = Invoke-RestMethod `
-    -Uri "http://127.0.0.1:8000/api/v1/health"
-
+$fastApiHealth = Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/v1/health"
 Write-Host "FastAPI: $($fastApiHealth.status)" -ForegroundColor Green
 
-$gatewayHealth = Invoke-RestMethod `
-    -Uri "https://Pareezyy.local:8445/api/v1/health"
-
+$gatewayHealth = Invoke-RestMethod -Uri "https://Pareezyy.local:8445/api/v1/health"
 Write-Host "HTTPS Gateway: $($gatewayHealth.status)" -ForegroundColor Green
 
-Write-Host "`nIntelSOC startup complete." -ForegroundColor Green
+$TIWorker = Get-CimInstance Win32_Process |
+Where-Object {
+    $_.CommandLine -match "app\.workers\.ti_worker"
+}
+
+if (-not $TIWorker) {
+    throw "TI Worker is not running after startup."
+}
+
+Write-Host "TI Worker: RUNNING" -ForegroundColor Green
+
+Write-Host ""
+Write-Host "IntelSOC startup complete." -ForegroundColor Green
