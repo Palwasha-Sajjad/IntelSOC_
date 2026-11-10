@@ -42,7 +42,13 @@ def test_no_indicators_marks_processed_without_provider_lookup(monkeypatch):
     monkeypatch.setattr(service, "get_alert_evidence", lambda value: (row,))
 
     processed = []
-    monkeypatch.setattr(service, "mark_alert_ti_processed", processed.append)
+    monkeypatch.setattr(
+        service,
+        "mark_alert_ti_processed",
+        lambda alert_id, provider="virustotal": processed.append(
+            (alert_id, provider)
+        ),
+    )
     monkeypatch.setattr(
         service,
         "lookup_virustotal",
@@ -58,7 +64,7 @@ def test_no_indicators_marks_processed_without_provider_lookup(monkeypatch):
     assert result.status == "processed"
     assert result.indicators == 0
     assert result.provider_lookups == 0
-    assert processed == [alert_id]
+    assert processed == [(alert_id, "virustotal")]
 
 
 def test_cache_hit_skips_provider_and_links_all_evidence(monkeypatch):
@@ -104,7 +110,7 @@ def test_cache_hit_skips_provider_and_links_all_evidence(monkeypatch):
         "link_alert_indicator",
         lambda **kwargs: calls.append(kwargs),
     )
-    monkeypatch.setattr(service, "mark_alert_ti_processed", lambda value: None)
+    monkeypatch.setattr(service, "mark_alert_ti_processed", lambda *args, **kwargs: None)
 
     summary = service.enrich_alert_with_virustotal(
         alert_id,
@@ -158,7 +164,7 @@ def test_cache_miss_calls_provider_once_and_persists_24h(monkeypatch):
 
     monkeypatch.setattr(service, "persist_ti_result", fake_persist)
     monkeypatch.setattr(service, "link_alert_indicator", lambda **kwargs: None)
-    monkeypatch.setattr(service, "mark_alert_ti_processed", lambda value: None)
+    monkeypatch.setattr(service, "mark_alert_ti_processed", lambda *args, **kwargs: None)
 
     summary = service.enrich_alert_with_virustotal(
         alert_id,
@@ -205,7 +211,7 @@ def test_transient_provider_result_uses_short_cache_and_marks_failed(
     monkeypatch.setattr(
         service,
         "mark_alert_ti_failed",
-        lambda alert_id, error: failures.append((alert_id, error)),
+        lambda alert_id, error, provider="virustotal": failures.append((alert_id, error, provider)),
     )
 
     summary = service.enrich_alert_with_virustotal(
@@ -248,11 +254,17 @@ def test_not_found_is_completed_unknown_not_transient_failure(monkeypatch):
 
     processed = []
     failed = []
-    monkeypatch.setattr(service, "mark_alert_ti_processed", processed.append)
+    monkeypatch.setattr(
+        service,
+        "mark_alert_ti_processed",
+        lambda alert_id, provider="virustotal": processed.append(
+            (alert_id, provider)
+        ),
+    )
     monkeypatch.setattr(
         service,
         "mark_alert_ti_failed",
-        lambda *args: failed.append(args),
+        lambda *args, **kwargs: failed.append((args, kwargs)),
     )
 
     summary = service.enrich_alert_with_virustotal(
@@ -271,7 +283,7 @@ def test_not_found_is_completed_unknown_not_transient_failure(monkeypatch):
     )
 
     assert summary.status == "processed"
-    assert processed == [alert_id]
+    assert processed == [(alert_id, "virustotal")]
     assert failed == []
 
 
@@ -302,7 +314,7 @@ def test_cached_transient_result_marks_failed_without_new_lookup(monkeypatch):
     monkeypatch.setattr(
         service,
         "mark_alert_ti_failed",
-        lambda alert_id, error: failures.append((alert_id, error)),
+        lambda alert_id, error, provider="virustotal": failures.append((alert_id, error, provider)),
     )
 
     summary = service.enrich_alert_with_virustotal(
@@ -358,7 +370,13 @@ def test_abuseipdb_filters_out_domain_indicators(monkeypatch):
 
     monkeypatch.setattr(service, "get_alert_evidence", lambda value: (row,))
     processed = []
-    monkeypatch.setattr(service, "mark_alert_ti_processed", processed.append)
+    monkeypatch.setattr(
+        service,
+        "mark_alert_ti_processed",
+        lambda alert_id, provider="virustotal": processed.append(
+            (alert_id, provider)
+        ),
+    )
 
     summary = service.enrich_alert_with_abuseipdb(
         alert_id,
@@ -372,7 +390,7 @@ def test_abuseipdb_filters_out_domain_indicators(monkeypatch):
     assert summary.indicators == 0
     assert summary.provider_lookups == 0
     assert summary.status == "processed"
-    assert processed == [alert_id]
+    assert processed == [(alert_id, "abuseipdb")]
 
 
 def test_abuseipdb_cache_hit_uses_provider_specific_cache(monkeypatch):
@@ -403,7 +421,7 @@ def test_abuseipdb_cache_hit_uses_provider_specific_cache(monkeypatch):
 
     monkeypatch.setattr(service, "get_cached_ti_result", fake_cache)
     monkeypatch.setattr(service, "link_alert_indicator", lambda **kwargs: None)
-    monkeypatch.setattr(service, "mark_alert_ti_processed", lambda value: None)
+    monkeypatch.setattr(service, "mark_alert_ti_processed", lambda *args, **kwargs: None)
 
     summary = service.enrich_alert_with_abuseipdb(
         alert_id,
@@ -452,7 +470,7 @@ def test_abuseipdb_cache_miss_calls_provider_and_persists(monkeypatch):
 
     monkeypatch.setattr(service, "persist_ti_result", fake_persist)
     monkeypatch.setattr(service, "link_alert_indicator", lambda **kwargs: None)
-    monkeypatch.setattr(service, "mark_alert_ti_processed", lambda value: None)
+    monkeypatch.setattr(service, "mark_alert_ti_processed", lambda *args, **kwargs: None)
 
     summary = service.enrich_alert_with_abuseipdb(
         alert_id,
@@ -499,7 +517,7 @@ def test_abuseipdb_transient_failure_marks_alert_failed(
     monkeypatch.setattr(
         service,
         "mark_alert_ti_failed",
-        lambda alert_id, error: failures.append((alert_id, error)),
+        lambda alert_id, error, provider="virustotal": failures.append((alert_id, error, provider)),
     )
 
     summary = service.enrich_alert_with_abuseipdb(
