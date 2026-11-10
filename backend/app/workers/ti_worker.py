@@ -1,14 +1,16 @@
 import os
 import time
 from pathlib import Path
-from typing import Any
 from uuid import UUID
 
 import psycopg
 from dotenv import load_dotenv
 
 from app.core.config import get_postgres_config
-from app.services.ti_orchestration_service import enrich_alert_with_virustotal
+from app.services.ti_orchestration_service import (
+    enrich_alert_with_abuseipdb,
+    enrich_alert_with_virustotal,
+)
 from app.services.ti_persistence_service import mark_alert_ti_failed
 
 
@@ -18,14 +20,18 @@ load_dotenv(ROOT / ".env")
 POLL_SECONDS = 1.0
 BATCH_SIZE = 20
 RETRY_DELAY_SECONDS = 300
+SUPPORTED_PROVIDERS = {"virustotal", "abuseipdb"}
 
 
 def fetch_pending_ti_alerts(
     *,
+    provider: str = "virustotal",
     limit: int = BATCH_SIZE,
     retry_delay_seconds: int = RETRY_DELAY_SECONDS,
 ) -> list[UUID]:
-    """Return new alerts plus failed alerts whose retry delay has elapsed."""
+    """Return new alerts plus retryable failures for one TI provider."""
+
+    provider = _normalize_provider(provider)
 
     if limit < 1:
         raise ValueError("limit must be positive")
@@ -44,6 +50,7 @@ def fetch_pending_ti_alerts(
                 FROM security_alerts AS a
                 LEFT JOIN alert_ti_analysis_state AS s
                   ON s.alert_id = a.alert_id
+                 AND s.provider = %s
                 WHERE
                     s.alert_id IS NULL
                     OR (
@@ -56,6 +63,7 @@ def fetch_pending_ti_alerts(
                 LIMIT %s
                 """,
                 (
+                    provider,
                     retry_delay_seconds,
                     limit,
                 ),
@@ -68,17 +76,21 @@ def fetch_pending_ti_alerts(
 
 def process_ti_batch(
     *,
+    provider: str = "virustotal",
     api_key: str,
     limit: int = BATCH_SIZE,
     retry_delay_seconds: int = RETRY_DELAY_SECONDS,
 ) -> dict[str, int]:
-    """Process one bounded TI batch without affecting detection/ingestion."""
+    """Process one bounded provider-specific TI batch."""
 
+    provider = _normalize_provider(provider)
     key = str(api_key or "").strip()
     if not key:
-        raise ValueError("VT_API_KEY is required")
+        env_name = _provider_env_name(provider)
+        raise ValueError(f"{env_name} is required")
 
     alert_ids = fetch_pending_ti_alerts(
+        provider=provider,
         limit=limit,
         retry_delay_seconds=retry_delay_seconds,
     )
@@ -92,9 +104,15 @@ def process_ti_batch(
         "indicators": 0,
     }
 
+    enrich = (
+        enrich_alert_with_virustotal
+        if provider == "virustotal"
+        else enrich_alert_with_abuseipdb
+    )
+
     for alert_id in alert_ids:
         try:
-            summary = enrich_alert_with_virustotal(
+            summary = enrich(
                 alert_id,
                 api_key=key,
             )
@@ -115,16 +133,18 @@ def process_ti_batch(
                 mark_alert_ti_failed(
                     alert_id,
                     str(error),
+                    provider=provider,
                 )
             except Exception as state_error:
                 print(
                     "TI worker could not persist failure state for "
-                    f"{alert_id}: {state_error}",
+                    f"{provider} alert {alert_id}: {state_error}",
                     flush=True,
                 )
 
             print(
-                f"TI enrichment failed for alert {alert_id}: {error}",
+                f"TI enrichment failed for {provider} alert "
+                f"{alert_id}: {error}",
                 flush=True,
             )
 
@@ -132,31 +152,41 @@ def process_ti_batch(
 
 
 def main() -> None:
-    api_key = str(os.getenv("VT_API_KEY") or "").strip()
+    keys = {
+        "virustotal": str(os.getenv("VT_API_KEY") or "").strip(),
+        "abuseipdb": str(os.getenv("ABUSEIPDB_KEY") or "").strip(),
+    }
 
-    if not api_key:
+    missing = [
+        _provider_env_name(provider)
+        for provider, key in keys.items()
+        if not key
+    ]
+    if missing:
         raise RuntimeError(
-            "VT_API_KEY is not configured"
+            "Missing TI API key(s): " + ", ".join(missing)
         )
 
     print("IntelSOC TI worker started", flush=True)
 
     while True:
         try:
-            result = process_ti_batch(
-                api_key=api_key,
-            )
-
-            if result["alerts_selected"]:
-                print(
-                    "TI batch: "
-                    f"selected={result['alerts_selected']} "
-                    f"processed={result['alerts_processed']} "
-                    f"failed={result['alerts_failed']} "
-                    f"lookups={result['provider_lookups']} "
-                    f"cache_hits={result['cache_hits']}",
-                    flush=True,
+            for provider in ("virustotal", "abuseipdb"):
+                result = process_ti_batch(
+                    provider=provider,
+                    api_key=keys[provider],
                 )
+
+                if result["alerts_selected"]:
+                    print(
+                        f"TI batch provider={provider}: "
+                        f"selected={result['alerts_selected']} "
+                        f"processed={result['alerts_processed']} "
+                        f"failed={result['alerts_failed']} "
+                        f"lookups={result['provider_lookups']} "
+                        f"cache_hits={result['cache_hits']}",
+                        flush=True,
+                    )
 
         except (psycopg.Error, OSError) as error:
             print(
@@ -165,6 +195,21 @@ def main() -> None:
             )
 
         time.sleep(POLL_SECONDS)
+
+
+def _normalize_provider(provider: str) -> str:
+    value = str(provider or "").strip().lower()
+    if value not in SUPPORTED_PROVIDERS:
+        raise ValueError("unsupported TI provider")
+    return value
+
+
+def _provider_env_name(provider: str) -> str:
+    if provider == "virustotal":
+        return "VT_API_KEY"
+    if provider == "abuseipdb":
+        return "ABUSEIPDB_KEY"
+    raise ValueError("unsupported TI provider")
 
 
 if __name__ == "__main__":
