@@ -101,6 +101,26 @@ def test_lin001_supports_ipv6():
     assert candidates[0].source_ip == "2001:db8::10"
 
 
+def test_lin001_rejects_unspecified_source_addresses():
+    for source_ip in ("0.0.0.0", "::"):
+        events = [
+            ssh_failure(index, source_ip=source_ip)
+            for index in range(5)
+        ]
+        assert evaluate_ssh_bruteforce(events) == []
+
+
+def test_lin001_keeps_linux_usernames_case_sensitive():
+    events = [
+        ssh_failure(0, user="Alice"),
+        ssh_failure(1, user="Alice"),
+        ssh_failure(2, user="Alice"),
+        ssh_failure(3, user="alice"),
+        ssh_failure(4, user="alice"),
+    ]
+    assert evaluate_ssh_bruteforce(events) == []
+
+
 def test_lin001_requires_normalized_source_ip():
     events = [ssh_failure(index) for index in range(5)]
     for event in events:
