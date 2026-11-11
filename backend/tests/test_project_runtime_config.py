@@ -10,6 +10,7 @@ def test_start_script_launches_all_runtime_workers():
     assert "-m app.workers.event_worker" in content
     assert "-m app.workers.analysis_worker" in content
     assert "-m app.workers.ti_worker" in content
+    assert "-m app.workers.risk_worker" in content
 
 
 def test_stop_script_stops_all_runtime_workers():
@@ -18,6 +19,7 @@ def test_stop_script_stops_all_runtime_workers():
     assert "app\\.workers\\.event_worker" in content
     assert "app\\.workers\\.analysis_worker" in content
     assert "app\\.workers\\.ti_worker" in content
+    assert "app\\.workers\\.risk_worker" in content
 
 
 def test_start_script_checks_ti_worker_survived_startup():
@@ -53,3 +55,10 @@ def test_ti_worker_prefers_project_env_file():
     ).read_text(encoding="utf-8-sig")
 
     assert 'load_dotenv(ROOT / ".env", override=True)' in content
+
+
+def test_start_script_checks_risk_worker_survived_startup():
+    content = (ROOT / "Start-IntelSOC.ps1").read_text(encoding="utf-8-sig")
+
+    assert "$RiskWorkerProcess.HasExited" in content
+    assert "011_create_risk_scoring.sql" in content
