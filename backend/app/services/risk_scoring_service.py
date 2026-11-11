@@ -253,6 +253,28 @@ def load_risk_inputs(alert_id: UUID | str) -> RiskInputs:
 
             cursor.execute(
                 """
+                SELECT provider, status
+                FROM alert_ti_analysis_state
+                WHERE alert_id = %s
+                  AND provider IN ('virustotal', 'abuseipdb')
+                """,
+                (alert_id,),
+            )
+            ti_states = {
+                provider: status
+                for provider, status in cursor.fetchall()
+            }
+            required_states = {
+                "virustotal": "processed",
+                "abuseipdb": "processed",
+            }
+            if ti_states != required_states:
+                raise RuntimeError(
+                    "Threat Intelligence is not complete for this alert"
+                )
+
+            cursor.execute(
+                """
                 SELECT DISTINCT
                     r.provider,
                     r.verdict,
