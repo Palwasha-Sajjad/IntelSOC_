@@ -99,7 +99,7 @@ def fetch_pending_risk_alerts(
                         WHERE ati.alert_id = a.alert_id
                           AND tr.updated_at > ra.updated_at
                     )
-                    OR ra.score_version <> '1.0'
+                    OR ra.score_version <> '1.1'
                 )
                 AND (
                     rs.alert_id IS NULL
