@@ -152,7 +152,32 @@ else {
 }
 
 # --------------------------------------------------
-# 7. Caddy
+# 7. Risk scoring worker
+# --------------------------------------------------
+
+$RiskWorker = Get-CimInstance Win32_Process |
+Where-Object {
+    $_.CommandLine -match "app\.workers\.risk_worker"
+}
+
+if (-not $RiskWorker) {
+    $RiskWorkerProcess = Start-Process -FilePath $Python -ArgumentList "-m app.workers.risk_worker" -WorkingDirectory $Backend -WindowStyle Minimized -PassThru
+
+    # Fail fast if the risk schema is missing or startup validation fails.
+    Start-Sleep -Seconds 1
+
+    if ($RiskWorkerProcess.HasExited) {
+        throw "Risk Worker exited during startup. Verify migration 011_create_risk_scoring.sql has been applied."
+    }
+
+    Write-Host "Risk Worker: STARTED" -ForegroundColor Green
+}
+else {
+    Write-Host "Risk Worker: already running" -ForegroundColor DarkGreen
+}
+
+# --------------------------------------------------
+# 8. Caddy
 # --------------------------------------------------
 
 $CaddyProcess = Get-Process caddy -ErrorAction SilentlyContinue
@@ -167,7 +192,7 @@ else {
 }
 
 # --------------------------------------------------
-# 8. Health checks
+# 9. Health checks
 # --------------------------------------------------
 
 Start-Sleep -Seconds 3
@@ -191,6 +216,17 @@ if (-not $TIWorker) {
 }
 
 Write-Host "TI Worker: RUNNING" -ForegroundColor Green
+
+$RiskWorker = Get-CimInstance Win32_Process |
+Where-Object {
+    $_.CommandLine -match "app\.workers\.risk_worker"
+}
+
+if (-not $RiskWorker) {
+    throw "Risk Worker is not running after startup."
+}
+
+Write-Host "Risk Worker: RUNNING" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "IntelSOC startup complete." -ForegroundColor Green
