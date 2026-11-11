@@ -39,6 +39,8 @@ CREATE TABLE IF NOT EXISTS alert_risk_assessments (
                 'malicious'
             )
         ),
+    assessment_status VARCHAR(20) NOT NULL
+        CHECK (assessment_status IN ('provisional', 'complete')),
     evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
     score_version VARCHAR(20) NOT NULL DEFAULT '1.0',
     assessed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
