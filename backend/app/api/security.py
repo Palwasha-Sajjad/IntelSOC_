@@ -18,6 +18,11 @@ api_key_header = APIKeyHeader(
     auto_error=False,
 )
 
+admin_api_key_header = APIKeyHeader(
+    name="X-IntelSOC-Admin-Key",
+    auto_error=False,
+)
+
 
 def verify_ingest_key(
     submitted_key: str | None = Security(api_key_header),
@@ -41,6 +46,35 @@ def verify_ingest_key(
         raise HTTPException(
             status_code=401,
             detail="Invalid or missing ingestion API key",
+        )
+
+
+def verify_admin_key(
+    submitted_key: str | None = Security(admin_api_key_header),
+) -> None:
+    """
+    Validate the dedicated administrator API key used for protected
+    device-management operations.
+
+    The administrator key is intentionally separate from enrollment
+    and ingestion credentials.
+    """
+
+    expected_key = os.getenv("INTELSOC_ADMIN_API_KEY")
+
+    if not expected_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Administrator authentication not configured",
+        )
+
+    if not submitted_key or not secrets.compare_digest(
+        submitted_key,
+        expected_key,
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing administrator API key",
         )
 
 

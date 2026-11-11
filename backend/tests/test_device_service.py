@@ -6,6 +6,8 @@ import pytest
 from app.services.device_service import (
     get_device_by_id,
     register_device,
+    update_device_criticality,
+    validate_criticality,
     validate_platform,
 )
 
@@ -25,7 +27,22 @@ def test_validate_platform_rejects_unknown_platform():
         validate_platform("macos")
 
 
-def test_register_device_returns_active_device(monkeypatch):
+def test_validate_criticality_accepts_supported_values():
+    assert validate_criticality("low") == "low"
+    assert validate_criticality("medium") == "medium"
+    assert validate_criticality("high") == "high"
+
+
+def test_validate_criticality_normalizes_case():
+    assert validate_criticality(" HIGH ") == "high"
+
+
+def test_validate_criticality_rejects_unknown_value():
+    with pytest.raises(ValueError, match="Unsupported criticality"):
+        validate_criticality("critical")
+
+
+def test_register_device_returns_active_medium_device(monkeypatch):
     captured = {}
     created_at = datetime.now(timezone.utc)
 
@@ -40,6 +57,7 @@ def test_register_device_returns_active_device(monkeypatch):
                 "LAB-WIN-01",
                 "windows",
                 "active",
+                "medium",
                 created_at,
                 None,
             )
@@ -83,9 +101,11 @@ def test_register_device_returns_active_device(monkeypatch):
     assert device["hostname"] == "LAB-WIN-01"
     assert device["platform"] == "windows"
     assert device["status"] == "active"
+    assert device["criticality"] == "medium"
     assert device["last_seen_at"] is None
 
     assert "INSERT INTO registered_devices" in captured["sql"]
+    assert "criticality" not in captured["sql"].split("VALUES", 1)[0]
     assert "certificate_common_name" not in captured["sql"]
     assert "certificate_fingerprint" not in captured["sql"]
 
@@ -113,6 +133,7 @@ def test_get_device_by_id_returns_device(monkeypatch):
                 "LAB-LINUX-01",
                 "linux",
                 "active",
+                "high",
                 created_at,
                 None,
             )
@@ -152,6 +173,7 @@ def test_get_device_by_id_returns_device(monkeypatch):
     assert device["hostname"] == "LAB-LINUX-01"
     assert device["platform"] == "linux"
     assert device["status"] == "active"
+    assert device["criticality"] == "high"
 
 
 def test_get_device_by_id_returns_none_when_missing(monkeypatch):
@@ -192,6 +214,112 @@ def test_get_device_by_id_returns_none_when_missing(monkeypatch):
     )
 
     assert get_device_by_id(uuid4()) is None
+
+
+def test_update_device_criticality_changes_only_criticality(monkeypatch):
+    device_id = uuid4()
+    created_at = datetime.now(timezone.utc)
+    captured = {}
+
+    class FakeCursor:
+        def execute(self, sql, params):
+            captured["sql"] = sql
+            captured["params"] = params
+
+        def fetchone(self):
+            return (
+                device_id,
+                "LAB-WIN-02",
+                "windows",
+                "active",
+                "high",
+                created_at,
+                None,
+            )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeConnection:
+        def cursor(self):
+            return FakeCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    import app.services.device_service as device_service
+
+    monkeypatch.setenv(
+        "POSTGRES_PASSWORD",
+        "test-only-password",
+    )
+
+    monkeypatch.setattr(
+        device_service.psycopg,
+        "connect",
+        lambda **kwargs: FakeConnection(),
+    )
+
+    device = update_device_criticality(
+        device_id=device_id,
+        criticality="HIGH",
+    )
+
+    assert device["criticality"] == "high"
+    assert captured["params"] == ("high", device_id)
+    assert "SET criticality = %s" in captured["sql"]
+    assert "SET status" not in captured["sql"]
+    assert "SET hostname" not in captured["sql"]
+    assert "SET platform" not in captured["sql"]
+
+
+def test_update_device_criticality_returns_none_when_missing(monkeypatch):
+    class FakeCursor:
+        def execute(self, sql, params):
+            pass
+
+        def fetchone(self):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeConnection:
+        def cursor(self):
+            return FakeCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    import app.services.device_service as device_service
+
+    monkeypatch.setenv(
+        "POSTGRES_PASSWORD",
+        "test-only-password",
+    )
+
+    monkeypatch.setattr(
+        device_service.psycopg,
+        "connect",
+        lambda **kwargs: FakeConnection(),
+    )
+
+    assert update_device_criticality(
+        device_id=uuid4(),
+        criticality="low",
+    ) is None
 
 
 def test_update_device_last_seen_updates_active_device(monkeypatch):

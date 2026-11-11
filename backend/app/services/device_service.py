@@ -11,6 +11,7 @@ load_dotenv(ROOT / ".env")
 
 
 SUPPORTED_PLATFORMS = {"windows", "linux"}
+SUPPORTED_CRITICALITIES = {"low", "medium", "high"}
 
 
 def validate_platform(platform: str) -> str:
@@ -19,6 +20,17 @@ def validate_platform(platform: str) -> str:
     if normalized not in SUPPORTED_PLATFORMS:
         raise ValueError(
             f"Unsupported platform: {platform}"
+        )
+
+    return normalized
+
+
+def validate_criticality(criticality: str) -> str:
+    normalized = criticality.strip().lower()
+
+    if normalized not in SUPPORTED_CRITICALITIES:
+        raise ValueError(
+            f"Unsupported criticality: {criticality}"
         )
 
     return normalized
@@ -34,6 +46,10 @@ def register_device(
     Devices created through the protected enrollment endpoint are
     immediately active because enrollment itself is authenticated
     using INTELSOC_ENROLLMENT_TOKEN.
+
+    Device criticality is intentionally not supplied by the endpoint.
+    PostgreSQL assigns the safe default of 'medium' until an
+    administrator explicitly changes it.
     """
 
     platform = validate_platform(platform)
@@ -63,6 +79,7 @@ def register_device(
                     hostname,
                     platform,
                     status,
+                    criticality,
                     created_at,
                     last_seen_at
                 """,
@@ -80,8 +97,9 @@ def register_device(
         "hostname": row[1],
         "platform": row[2],
         "status": row[3],
-        "created_at": row[4],
-        "last_seen_at": row[5],
+        "criticality": row[4],
+        "created_at": row[5],
+        "last_seen_at": row[6],
     }
 
 
@@ -98,6 +116,7 @@ def get_device_by_id(device_id):
                     hostname,
                     platform,
                     status,
+                    criticality,
                     created_at,
                     last_seen_at
                 FROM registered_devices
@@ -116,8 +135,61 @@ def get_device_by_id(device_id):
         "hostname": row[1],
         "platform": row[2],
         "status": row[3],
-        "created_at": row[4],
-        "last_seen_at": row[5],
+        "criticality": row[4],
+        "created_at": row[5],
+        "last_seen_at": row[6],
+    }
+
+
+def update_device_criticality(
+    device_id,
+    criticality: str,
+) -> dict | None:
+    """
+    Update only the administrator-controlled criticality classification
+    for an existing registered device.
+    """
+
+    criticality = validate_criticality(criticality)
+
+    with psycopg.connect(
+        **get_postgres_config(),
+        connect_timeout=5,
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE registered_devices
+                SET criticality = %s
+                WHERE device_id = %s
+                RETURNING
+                    device_id,
+                    hostname,
+                    platform,
+                    status,
+                    criticality,
+                    created_at,
+                    last_seen_at
+                """,
+                (
+                    criticality,
+                    device_id,
+                ),
+            )
+
+            row = cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "device_id": row[0],
+        "hostname": row[1],
+        "platform": row[2],
+        "status": row[3],
+        "criticality": row[4],
+        "created_at": row[5],
+        "last_seen_at": row[6],
     }
 
 
@@ -130,8 +202,8 @@ def update_device_last_seen(device_id) -> bool:
 
     try:
         with psycopg.connect(
-        **get_postgres_config(),
-        connect_timeout=5,
+            **get_postgres_config(),
+            connect_timeout=5,
         ) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
