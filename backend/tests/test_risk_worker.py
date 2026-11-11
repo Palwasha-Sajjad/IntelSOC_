@@ -39,6 +39,8 @@ def test_fetch_pending_risk_alerts_requires_completed_ti(monkeypatch):
     assert "vt.status = 'processed'" in sql
     assert "abuse.provider = 'abuseipdb'" in sql
     assert "abuse.status = 'processed'" in sql
+    assert "ra.assessment_status = 'provisional'" in sql
+    assert "ai.alert_id IS NOT NULL" in sql
     assert "ai.updated_at > ra.updated_at" in sql
     assert "tr.updated_at > ra.updated_at" in sql
     assert params == (30, 10)
