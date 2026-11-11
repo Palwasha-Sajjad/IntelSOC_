@@ -122,3 +122,39 @@ def test_process_risk_batch_records_failure(monkeypatch):
 
     assert result["alerts_failed"] == 1
     assert failures == [(alert_id, "scoring failed")]
+
+
+def test_validate_risk_schema_checks_all_required_tables(monkeypatch):
+    cursor = MagicMock()
+    cursor.fetchone.side_effect = [
+        ("alert_ai_evidence",),
+        ("alert_risk_assessments",),
+        ("alert_risk_analysis_state",),
+    ]
+
+    monkeypatch.setattr(
+        risk_worker.psycopg,
+        "connect",
+        lambda **kwargs: connection_with_cursor(cursor),
+    )
+
+    risk_worker.validate_risk_schema()
+
+    assert cursor.execute.call_count == 3
+
+
+def test_validate_risk_schema_fails_when_table_missing(monkeypatch):
+    cursor = MagicMock()
+    cursor.fetchone.side_effect = [
+        ("alert_ai_evidence",),
+        (None,),
+    ]
+
+    monkeypatch.setattr(
+        risk_worker.psycopg,
+        "connect",
+        lambda **kwargs: connection_with_cursor(cursor),
+    )
+
+    with pytest.raises(RuntimeError, match="schema is missing table"):
+        risk_worker.validate_risk_schema()
