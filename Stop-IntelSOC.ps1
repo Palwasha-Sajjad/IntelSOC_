@@ -22,6 +22,17 @@ ForEach-Object {
 
 Write-Host "FastAPI: STOPPED" -ForegroundColor Green
 
+# Risk scoring worker
+Get-CimInstance Win32_Process |
+Where-Object {
+    $_.CommandLine -match "app\.workers\.risk_worker"
+} |
+ForEach-Object {
+    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host "Risk Worker: STOPPED" -ForegroundColor Green
+
 # Threat Intelligence worker
 Get-CimInstance Win32_Process |
 Where-Object {
