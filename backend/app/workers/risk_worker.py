@@ -86,6 +86,10 @@ def fetch_pending_risk_alerts(
                   ON rs.alert_id = a.alert_id
                 WHERE (
                     ra.alert_id IS NULL
+                    OR (
+                        ra.assessment_status = 'provisional'
+                        AND ai.alert_id IS NOT NULL
+                    )
                     OR ai.updated_at > ra.updated_at
                     OR EXISTS (
                         SELECT 1
