@@ -25,7 +25,7 @@ RULE_SCORES = {
 MAX_RULE_SCORE = 60
 MAX_TI_SCORE = 25
 MAX_LANOBERT_SCORE = 15
-SCORE_VERSION = "1.0"
+SCORE_VERSION = "1.1"
 
 
 @dataclass(frozen=True)
@@ -76,6 +76,26 @@ def classify_risk(score: int) -> str:
     if score <= 70:
         return "suspicious"
     return "malicious"
+
+
+def apply_evidence_overrides(
+    *,
+    base_classification: str,
+    rule_score: int,
+    ti_score: int,
+) -> str:
+    """Prevent strong malicious TI evidence from being labeled normal.
+
+    The numeric score remains unchanged for explainability. These are
+    classification guardrails only.
+    """
+    if rule_score >= 50 and ti_score >= 20:
+        return "malicious"
+
+    if ti_score >= 20 and base_classification == "normal":
+        return "suspicious"
+
+    return base_classification
 
 
 def score_rule_severity(severity: str) -> int:
@@ -218,13 +238,20 @@ def calculate_risk(inputs: RiskInputs) -> RiskAssessment:
         },
     }
 
+    base_classification = classify_risk(overall)
+    classification = apply_evidence_overrides(
+        base_classification=base_classification,
+        rule_score=rule_score,
+        ti_score=ti_score,
+    )
+
     return RiskAssessment(
         alert_id=inputs.alert_id,
         rule_score=rule_score,
         ti_score=ti_score,
         lanobert_score=lanobert_score,
         overall_score=overall,
-        classification=classify_risk(overall),
+        classification=classification,
         assessment_status=(
             "complete"
             if inputs.lanobert_evidence is not None
