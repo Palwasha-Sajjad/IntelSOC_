@@ -6,6 +6,7 @@ from app.services.risk_scoring_service import (
     AiEvidence,
     RiskInputs,
     TiEvidence,
+    apply_evidence_overrides,
     calculate_risk,
     classify_risk,
     score_rule_severity,
@@ -148,3 +149,48 @@ def test_lanobert_contribution_is_bounded():
                 ),
             )
         )
+
+
+def test_malicious_ti_cannot_be_classified_normal():
+    result = calculate_risk(
+        RiskInputs(
+            alert_id=uuid4(),
+            severity="low",
+            ti_evidence=(
+                ti("virustotal", "malicious", confidence=70),
+            ),
+            lanobert_evidence=None,
+        )
+    )
+
+    assert result.rule_score == 20
+    assert result.ti_score == 20
+    assert result.overall_score == 40
+    assert result.classification == "suspicious"
+    assert result.assessment_status == "provisional"
+
+
+def test_high_rule_plus_malicious_ti_escalates_to_malicious():
+    result = calculate_risk(
+        RiskInputs(
+            alert_id=uuid4(),
+            severity="high",
+            ti_evidence=(
+                ti("virustotal", "malicious", confidence=70),
+            ),
+            lanobert_evidence=None,
+        )
+    )
+
+    assert result.rule_score == 50
+    assert result.ti_score == 20
+    assert result.overall_score == 70
+    assert result.classification == "malicious"
+
+
+def test_evidence_override_does_not_downgrade_existing_classification():
+    assert apply_evidence_overrides(
+        base_classification="malicious",
+        rule_score=20,
+        ti_score=20,
+    ) == "malicious"
