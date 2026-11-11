@@ -43,6 +43,7 @@ def test_fetch_pending_risk_alerts_requires_completed_ti(monkeypatch):
     assert "ai.alert_id IS NOT NULL" in sql
     assert "ai.updated_at > ra.updated_at" in sql
     assert "tr.updated_at > ra.updated_at" in sql
+    assert "ra.score_version <> '1.1'" in sql
     assert params == (30, 10)
 
 
