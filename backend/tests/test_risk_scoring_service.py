@@ -189,8 +189,31 @@ def test_high_rule_plus_malicious_ti_escalates_to_malicious():
 
 
 def test_evidence_override_does_not_downgrade_existing_classification():
-    assert apply_evidence_overrides(
+    classification, reason = apply_evidence_overrides(
         base_classification="malicious",
         rule_score=20,
         ti_score=20,
-    ) == "malicious"
+    )
+
+    assert classification == "malicious"
+    assert reason is None
+
+
+def test_override_reason_is_preserved_in_explainable_evidence():
+    result = calculate_risk(
+        RiskInputs(
+            alert_id=uuid4(),
+            severity="low",
+            ti_evidence=(
+                ti("virustotal", "malicious", confidence=70),
+            ),
+            lanobert_evidence=None,
+        )
+    )
+
+    assert result.evidence["decision"] == {
+        "base_classification": "normal",
+        "final_classification": "suspicious",
+        "override_applied": True,
+        "override_reason": "malicious_ti_minimum_suspicious",
+    }
