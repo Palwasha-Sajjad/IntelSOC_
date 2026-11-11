@@ -10,7 +10,7 @@ Intelligence module, incident correlation, or response logic.
 
 ## Evidence sources
 
-Version 1.0 reserves the full 100-point range as:
+Version 1.1 reserves the full 100-point range as:
 
 - Rule-Based Detection: 0-60
 - Threat Intelligence: 0-25
@@ -121,3 +121,16 @@ own risk tables.
 - LAnoBERT absence is explicit and provisional
 - future LAnoBERT evidence triggers automatic rescoring
 - startup fails fast if migration 011 has not been applied
+
+
+## Classification guardrails
+
+Version 1.1 keeps the numeric 0-100 score unchanged but prevents contradictory
+labels when strong TI evidence is present:
+
+- TI score >= 20 prevents a normal classification; minimum is suspicious.
+- Rule score >= 50 together with TI score >= 20 produces malicious.
+
+The assessment evidence records the base classification, final classification,
+whether an override was applied, and the override reason. Existing assessments
+with an older score_version are automatically selected for rescoring.
