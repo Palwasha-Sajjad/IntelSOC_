@@ -19,6 +19,31 @@ RETRY_DELAY_SECONDS = 30
 REQUIRED_TI_PROVIDERS = ("virustotal", "abuseipdb")
 
 
+def validate_risk_schema() -> None:
+    """Fail fast when the risk migration has not been applied."""
+    required_tables = (
+        "alert_ai_evidence",
+        "alert_risk_assessments",
+        "alert_risk_analysis_state",
+    )
+
+    with psycopg.connect(
+        **get_postgres_config(),
+        connect_timeout=5,
+    ) as connection:
+        with connection.cursor() as cursor:
+            for table in required_tables:
+                cursor.execute(
+                    "SELECT to_regclass(%s)",
+                    (f"public.{table}",),
+                )
+                row = cursor.fetchone()
+                if row is None or row[0] is None:
+                    raise RuntimeError(
+                        f"Risk scoring schema is missing table: {table}"
+                    )
+
+
 def fetch_pending_risk_alerts(
     *,
     limit: int = BATCH_SIZE,
@@ -215,6 +240,7 @@ def process_risk_batch(
 
 
 def main() -> None:
+    validate_risk_schema()
     print("IntelSOC risk scoring worker started", flush=True)
 
     while True:
