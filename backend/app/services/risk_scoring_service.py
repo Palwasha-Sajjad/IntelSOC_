@@ -83,19 +83,19 @@ def apply_evidence_overrides(
     base_classification: str,
     rule_score: int,
     ti_score: int,
-) -> str:
+) -> tuple[str, str | None]:
     """Prevent strong malicious TI evidence from being labeled normal.
 
     The numeric score remains unchanged for explainability. These are
     classification guardrails only.
     """
     if rule_score >= 50 and ti_score >= 20:
-        return "malicious"
+        return "malicious", "high_rule_plus_malicious_ti"
 
     if ti_score >= 20 and base_classification == "normal":
-        return "suspicious"
+        return "suspicious", "malicious_ti_minimum_suspicious"
 
-    return base_classification
+    return base_classification, None
 
 
 def score_rule_severity(severity: str) -> int:
@@ -239,11 +239,18 @@ def calculate_risk(inputs: RiskInputs) -> RiskAssessment:
     }
 
     base_classification = classify_risk(overall)
-    classification = apply_evidence_overrides(
+    classification, override_reason = apply_evidence_overrides(
         base_classification=base_classification,
         rule_score=rule_score,
         ti_score=ti_score,
     )
+
+    evidence["decision"] = {
+        "base_classification": base_classification,
+        "final_classification": classification,
+        "override_applied": override_reason is not None,
+        "override_reason": override_reason,
+    }
 
     return RiskAssessment(
         alert_id=inputs.alert_id,
