@@ -62,6 +62,7 @@ class RiskAssessment:
     lanobert_score: int
     overall_score: int
     classification: str
+    assessment_status: str
     evidence: dict[str, Any]
     score_version: str = SCORE_VERSION
 
@@ -224,6 +225,11 @@ def calculate_risk(inputs: RiskInputs) -> RiskAssessment:
         lanobert_score=lanobert_score,
         overall_score=overall,
         classification=classify_risk(overall),
+        assessment_status=(
+            "complete"
+            if inputs.lanobert_evidence is not None
+            else "provisional"
+        ),
         evidence=evidence,
     )
 
@@ -351,6 +357,7 @@ def persist_risk_assessment(
                     lanobert_score,
                     overall_score,
                     classification,
+                    assessment_status,
                     evidence,
                     score_version,
                     assessed_at,
@@ -358,7 +365,7 @@ def persist_risk_assessment(
                 )
                 VALUES (
                     %s, %s, %s, %s, %s,
-                    %s, %s::jsonb, %s, NOW(), NOW()
+                    %s, %s, %s::jsonb, %s, NOW(), NOW()
                 )
                 ON CONFLICT (alert_id)
                 DO UPDATE SET
@@ -367,6 +374,7 @@ def persist_risk_assessment(
                     lanobert_score = EXCLUDED.lanobert_score,
                     overall_score = EXCLUDED.overall_score,
                     classification = EXCLUDED.classification,
+                    assessment_status = EXCLUDED.assessment_status,
                     evidence = EXCLUDED.evidence,
                     score_version = EXCLUDED.score_version,
                     assessed_at = NOW(),
@@ -379,6 +387,7 @@ def persist_risk_assessment(
                     assessment.lanobert_score,
                     assessment.overall_score,
                     assessment.classification,
+                    assessment.assessment_status,
                     json.dumps(assessment.evidence),
                     assessment.score_version,
                 ),
