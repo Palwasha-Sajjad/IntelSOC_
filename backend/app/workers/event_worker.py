@@ -1,4 +1,4 @@
-﻿import json
+import json
 from pathlib import Path
 
 import psycopg
@@ -94,6 +94,7 @@ def process_message(client, stream_id, fields):
                 },
             )
             pipe.xack(STREAM, GROUP, stream_id)
+            pipe.xdel(STREAM, stream_id)
             pipe.execute()
 
         print(
@@ -102,7 +103,10 @@ def process_message(client, stream_id, fields):
         )
         return "dlq"
 
-    client.xack(STREAM, GROUP, stream_id)
+    with client.pipeline(transaction=True) as pipe:
+        pipe.xack(STREAM, GROUP, stream_id)
+        pipe.xdel(STREAM, stream_id)
+        pipe.execute()
 
     return "saved"
 

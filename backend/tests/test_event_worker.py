@@ -1,9 +1,10 @@
-﻿from unittest.mock import MagicMock
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import psycopg
 import pytest
 import redis
+from pydantic import ValidationError
 
 from app.workers import event_worker as worker
 from app.schemas.event import SecurityEvent
@@ -26,10 +27,10 @@ def test_valid_event(monkeypatch):
     assert result == "saved"
     assert saved == ["valid"]
 
-    client.xack.assert_called_once_with(
+    client.pipeline.return_value.__enter__.return_value.xack.assert_called_once_with(
         worker.STREAM, worker.GROUP, "11-0"
     )
-    client.pipeline.assert_not_called()
+    client.pipeline.assert_called_once_with(transaction=True)
 
 
 def test_invalid_event_goes_to_dlq(monkeypatch):
@@ -201,9 +202,73 @@ def test_valid_event_accepts_redis_byte_field_name(monkeypatch):
     assert result == "saved"
     assert saved == [b"valid"]
 
-    client.xack.assert_called_once_with(
+    client.pipeline.return_value.__enter__.return_value.xack.assert_called_once_with(
         worker.STREAM,
         worker.GROUP,
         b"16-0",
     )
-    client.pipeline.assert_not_called()
+    client.pipeline.assert_called_once_with(transaction=True)
+
+
+def test_valid_event_acknowledges_and_deletes_atomically(monkeypatch):
+    client = MagicMock()
+    monkeypatch.setattr(worker, "save_event", lambda payload: None)
+
+    result = worker.process_message(
+        client, "21-0", {"payload": "valid"}
+    )
+
+    pipe = client.pipeline.return_value.__enter__.return_value
+
+    assert result == "saved"
+    client.pipeline.assert_called_once_with(transaction=True)
+    pipe.xack.assert_called_once_with(
+        worker.STREAM, worker.GROUP, "21-0"
+    )
+    pipe.xdel.assert_called_once_with(worker.STREAM, "21-0")
+    pipe.execute.assert_called_once()
+
+
+def test_invalid_event_is_deleted_only_with_dlq_transfer(monkeypatch):
+    client = MagicMock()
+
+    def reject(payload):
+        raise ValidationError.from_exception_data(
+            "SecurityEvent",
+            [{"type": "missing", "loc": ("event_id",), "input": {}}],
+        )
+
+    monkeypatch.setattr(worker, "save_event", reject)
+
+    result = worker.process_message(
+        client, "22-0", {"payload": "invalid"}
+    )
+
+    pipe = client.pipeline.return_value.__enter__.return_value
+
+    assert result == "dlq"
+    pipe.xadd.assert_called_once()
+    pipe.xack.assert_called_once_with(
+        worker.STREAM, worker.GROUP, "22-0"
+    )
+    pipe.xdel.assert_called_once_with(worker.STREAM, "22-0")
+    pipe.execute.assert_called_once()
+
+
+def test_redis_cleanup_failure_propagates(monkeypatch):
+    client = MagicMock()
+    monkeypatch.setattr(worker, "save_event", lambda payload: None)
+
+    pipe = client.pipeline.return_value.__enter__.return_value
+    pipe.execute.side_effect = redis.exceptions.ConnectionError(
+        "Redis connection interrupted"
+    )
+
+    with pytest.raises(redis.exceptions.ConnectionError):
+        worker.process_message(
+            client, "23-0", {"payload": "valid"}
+        )
+
+    pipe.xack.assert_called_once()
+    pipe.xdel.assert_called_once()
+    pipe.execute.assert_called_once()
