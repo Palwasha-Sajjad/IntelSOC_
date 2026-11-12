@@ -1,8 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$ServerHost = "Pareezyy.local",
-    [string]$ServerIP = "192.168.1.6",
-    [int]$ServerPort = 8445,
+    [string]$ServerHost = "molehill-entomb-riveting.ngrok-free.dev",
+    [int]$ServerPort = 443,
     [string]$FluentBitVersion = "5.1.3",
     [switch]$MigrateExisting
 )
@@ -107,35 +106,12 @@ $ScriptBlockKey = "HKLM:\Software\Policies\Microsoft\Windows\PowerShell\ScriptBl
 New-Item -Path $ScriptBlockKey -Force | Out-Null
 Set-ItemProperty -Path $ScriptBlockKey -Name "EnableScriptBlockLogging" -Type DWord -Value 1
 
-Write-Step "Checking deployment bundle"
-if (-not (Test-Path $CaSource)) {
-    throw "Missing intelsoc-caddy-root.crt beside this installer."
-}
+Write-Step "Preparing IntelSOC directories"
+New-Item -ItemType Directory -Path $ConfigDir,$StorageDir -Force | Out-Null
 
-Write-Step "Creating IntelSOC directories"
-New-Item -ItemType Directory -Path $ConfigDir,$CertDir,$StorageDir -Force | Out-Null
-Copy-Item $CaSource $CaPath -Force
-
-Write-Step "Pinning IntelSOC hostname to the deployment server"
-$hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
-$lines = @(Get-Content $hostsPath -ErrorAction Stop)
-$escapedHost = [regex]::Escape($ServerHost)
-
-$lines = $lines |
-    Where-Object { $_ -notmatch "(?i)\s$escapedHost(\s|$)" }
-
-$lines += "$ServerIP $ServerHost"
-
-[System.IO.File]::WriteAllLines(
-    $hostsPath,
-    $lines,
-    [System.Text.Encoding]::ASCII
-)
-
-ipconfig /flushdns | Out-Null
-
-Write-Step "Trusting the IntelSOC Caddy root CA"
-Import-Certificate -FilePath $CaPath -CertStoreLocation "Cert:\LocalMachine\Root" | Out-Null
+# The ngrok endpoint uses a public TLS certificate trusted by Windows.
+# Keep the Caddy root certificate in the deployment kit for direct-Caddy use;
+# do not install it into this endpoint or pin the server to a LAN IP.
 
 Write-Step "Verifying IntelSOC HTTPS health"
 $healthUri = "https://${ServerHost}:$ServerPort/api/v1/health"
@@ -143,6 +119,7 @@ $handler = New-Object System.Net.Http.HttpClientHandler
 $handler.CheckCertificateRevocationList = $false
 $client = New-Object System.Net.Http.HttpClient($handler)
 try {
+    $client.DefaultRequestHeaders.Add("ngrok-skip-browser-warning", "1")
     $response = $client.GetAsync($healthUri).GetAwaiter().GetResult()
     if (-not $response.IsSuccessStatusCode) {
         throw "IntelSOC health endpoint returned HTTP $([int]$response.StatusCode)."
@@ -170,6 +147,7 @@ else {
     $client = New-Object System.Net.Http.HttpClient($handler)
     try {
         $client.DefaultRequestHeaders.Add("X-IntelSOC-Enrollment-Token", $enrollmentToken)
+        $client.DefaultRequestHeaders.Add("ngrok-skip-browser-warning", "1")
         $content = New-Object System.Net.Http.StringContent($payload,[Text.Encoding]::UTF8,"application/json")
         $uri = "https://${ServerHost}:$ServerPort/api/v1/devices/enroll"
         $response = $client.PostAsync($uri, $content).GetAwaiter().GetResult()
@@ -299,10 +277,11 @@ pipeline:
       tls: on
       tls.verify: on
       tls.verify_hostname: on
-      tls.ca_file: $CaPath
+      net.dns.resolver: LEGACY
       header:
         - "X-IntelSOC-Key $($enrollment.ingest_key)"
         - "X-Device-ID $($enrollment.device_id)"
+        - "ngrok-skip-browser-warning: 1"
       retry_limit: false
 "@
 
