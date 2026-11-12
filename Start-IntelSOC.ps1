@@ -177,18 +177,88 @@ else {
 }
 
 # --------------------------------------------------
-# 8. Caddy
+# 8. IntelSOC Caddy gateways
 # --------------------------------------------------
 
-$CaddyProcess = Get-Process caddy -ErrorAction SilentlyContinue
+$PortableCaddyConfig = Join-Path $env:LOCALAPPDATA "IntelSOC\gateway\Caddyfile"
 
-if (-not $CaddyProcess) {
-    Start-Process -FilePath "caddy" -ArgumentList "run", "--config", $CaddyConfig -WorkingDirectory $Root -WindowStyle Minimized
+if (-not (Test-Path $PortableCaddyConfig)) {
+    throw "Portable gateway configuration missing: $PortableCaddyConfig"
+}
 
-    Write-Host "Caddy: STARTED" -ForegroundColor Green
+$CaddyExe = (Get-Command caddy.exe -ErrorAction Stop).Source
+
+$CaddyInstances = @(Get-CimInstance Win32_Process |
+    Where-Object { $_.Name -eq "caddy.exe" })
+
+$OriginalCaddy = @($CaddyInstances | Where-Object {
+    $_.CommandLine -and $_.CommandLine.Contains($CaddyConfig)
+})
+
+$PortableCaddy = @($CaddyInstances | Where-Object {
+    $_.CommandLine -and $_.CommandLine.Contains($PortableCaddyConfig)
+})
+
+if ($OriginalCaddy.Count -eq 0) {
+    Start-Process -FilePath $CaddyExe `
+        -ArgumentList @("run", "--config", "`"$CaddyConfig`"") `
+        -WorkingDirectory $Root -WindowStyle Minimized
+
+    Write-Host "Original Caddy: STARTED" -ForegroundColor Green
 }
 else {
-    Write-Host "Caddy: already running" -ForegroundColor DarkGreen
+    Write-Host "Original Caddy: already running" -ForegroundColor DarkGreen
+}
+
+if ($PortableCaddy.Count -eq 0) {
+    Start-Process -FilePath $CaddyExe `
+        -ArgumentList @("run", "--config", "`"$PortableCaddyConfig`"", "--adapter", "caddyfile") `
+        -WorkingDirectory $Root -WindowStyle Minimized
+
+    Write-Host "Portable Caddy: STARTED" -ForegroundColor Green
+}
+else {
+    Write-Host "Portable Caddy: already running" -ForegroundColor DarkGreen
+}
+
+# --------------------------------------------------# --------------------------------------------------
+# 8B. Portable ngrok tunnel
+# --------------------------------------------------
+
+$NgrokExe = (Get-Command ngrok.exe -ErrorAction Stop).Source
+
+$NgrokPolicy = Join-Path $env:LOCALAPPDATA "IntelSOC\ngrok\policy.yml"
+
+$NgrokDomain = "https://molehill-entomb-riveting.ngrok-free.dev"
+
+if (-not (Test-Path $NgrokPolicy)) {
+    throw "ngrok traffic policy missing: $NgrokPolicy"
+}
+
+$NgrokInstances = @(Get-CimInstance Win32_Process |
+    Where-Object {
+        $_.Name -eq "ngrok.exe" -and
+        $_.CommandLine -like "*molehill-entomb-riveting.ngrok-free.dev*" -and
+        $_.CommandLine -like "*127.0.0.1:8767*"
+    })
+
+if ($NgrokInstances.Count -eq 0) {
+    Start-Process -FilePath $NgrokExe `
+        -ArgumentList @(
+            "http",
+            "127.0.0.1:8767",
+            "--url",
+            $NgrokDomain,
+            "--traffic-policy-file",
+            "`"$NgrokPolicy`""
+        ) `
+        -WorkingDirectory $Root `
+        -WindowStyle Minimized
+
+    Write-Host "IntelSOC ngrok: STARTED" -ForegroundColor Green
+}
+else {
+    Write-Host "IntelSOC ngrok: already running" -ForegroundColor DarkGreen
 }
 
 # --------------------------------------------------
@@ -202,8 +272,28 @@ Write-Host "=== IntelSOC Health ===" -ForegroundColor Cyan
 
 $fastApiHealth = Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/v1/health"
 Write-Host "FastAPI: $($fastApiHealth.status)" -ForegroundColor Green
+# Resolve the TLS hostname to loopback without disabling certificate verification.
+$GatewayCA = Join-Path $env:LOCALAPPDATA "IntelSOC\gateway\intelsoc-caddy-root.crt"
 
-$gatewayHealth = Invoke-RestMethod -Uri "https://Pareezyy.local:8445/api/v1/health"
+if (-not (Test-Path $GatewayCA)) {
+    throw "Gateway CA certificate missing: $GatewayCA"
+}
+
+$gatewayJson = & curl.exe -fsS --max-time 15 `
+    --ssl-no-revoke `
+    --cacert "$GatewayCA" `
+    --resolve "Pareezyy.local:8445:127.0.0.1" `
+    "https://Pareezyy.local:8445/api/v1/health"
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Original HTTPS gateway health check failed."
+}
+
+$gatewayHealth = $gatewayJson | ConvertFrom-Json
+
+if ($gatewayHealth.status -ne "ok") {
+    throw "Original HTTPS gateway returned an unhealthy status."
+}
 Write-Host "HTTPS Gateway: $($gatewayHealth.status)" -ForegroundColor Green
 
 $TIWorker = Get-CimInstance Win32_Process |

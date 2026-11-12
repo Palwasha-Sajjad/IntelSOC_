@@ -5,12 +5,39 @@ $Root = $PSScriptRoot
 Write-Host ""
 Write-Host "=== Stopping IntelSOC ===" -ForegroundColor Cyan
 
-# Stop ingress first so no new endpoint batches arrive during shutdown.
-Get-Process caddy -ErrorAction SilentlyContinue |
-Stop-Process -Force
+# Stop IntelSOC public ingress first.
+$NgrokInstances = @(Get-CimInstance Win32_Process |
+    Where-Object {
+        $_.Name -eq "ngrok.exe" -and
+        $_.CommandLine -like "*molehill-entomb-riveting.ngrok-free.dev*" -and
+        $_.CommandLine -like "*127.0.0.1:8767*"
+    })
 
-Write-Host "Caddy: STOPPED" -ForegroundColor Green
+foreach ($process in $NgrokInstances) {
+    Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+}
 
+Write-Host "IntelSOC ngrok: STOPPED" -ForegroundColor Green
+
+$OriginalConfig = Join-Path $Root "config\caddy\Caddyfile"
+$PortableConfig = Join-Path $env:LOCALAPPDATA "IntelSOC\gateway\Caddyfile"
+$LegacyPortableConfig = Join-Path $env:TEMP "intelsoc-caddy-remote-test\Caddyfile"
+
+$CaddyInstances = @(Get-CimInstance Win32_Process |
+    Where-Object {
+        $_.Name -eq "caddy.exe" -and
+        $_.CommandLine -and (
+            $_.CommandLine.Contains($OriginalConfig) -or
+            $_.CommandLine.Contains($PortableConfig) -or
+            $_.CommandLine.Contains($LegacyPortableConfig)
+        )
+    })
+
+foreach ($process in $CaddyInstances) {
+    Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+}
+
+Write-Host "IntelSOC Caddy gateways: STOPPED" -ForegroundColor Green
 # FastAPI
 Get-CimInstance Win32_Process |
 Where-Object {
