@@ -3,8 +3,8 @@
 set -Eeuo pipefail
 umask 077
 
-SERVER_HOST="${INTELSOC_SERVER_HOST:-Pareezyy.local}"
-SERVER_IP="${INTELSOC_SERVER_IP:-192.168.1.6}"
+SERVER_HOST="${INTELSOC_SERVER_HOST:-molehill-entomb-riveting.ngrok-free.dev}"
+SERVER_IP="${INTELSOC_SERVER_IP:-}"
 SERVER_PORT="${INTELSOC_SERVER_PORT:-8445}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CA_SOURCE="$SCRIPT_DIR/intelsoc-caddy-root.crt"
@@ -28,7 +28,12 @@ done
 step(){ printf '\n==> %s\n' "$*"; }
 die(){ echo "ERROR: $*" >&2; exit 1; }
 [[ $EUID == 0 ]] || die "Run with sudo."
-[[ -f "$CA_SOURCE" ]] || die "Place intelsoc-caddy-root.crt beside the installer."
+# A public endpoint uses the system TLS trust store. A pinned LAN IP uses Caddy's private CA.
+USE_PRIVATE_CA=0
+if [[ -n "$SERVER_IP" ]]; then
+  USE_PRIVATE_CA=1
+  [[ -f "$CA_SOURCE" ]] || die "Place intelsoc-caddy-root.crt beside the installer."
+fi
 [[ -r /etc/os-release ]] || die "Unsupported OS: missing os-release."
 # shellcheck source=/dev/null
 . /etc/os-release
@@ -36,7 +41,7 @@ die(){ echo "ERROR: $*" >&2; exit 1; }
 command -v systemctl >/dev/null || die "systemd required."
 [[ "$SERVER_PORT" =~ ^[0-9]{1,5}$ ]] && (( SERVER_PORT >= 1 && SERVER_PORT <= 65535 )) || die "Invalid server port."
 [[ "$SERVER_HOST" =~ ^[a-zA-Z0-9.-]+$ ]] || die "Invalid server hostname."
-[[ "$SERVER_IP" =~ ^[0-9a-fA-F:.]+$ ]] || die "Invalid server IP."
+[[ -z "$SERVER_IP" || "$SERVER_IP" =~ ^[0-9a-fA-F:.]+$ ]] || die "Invalid server IP."
 
 # Existing agent identities must not be silently replaced or re-enrolled.
 existing=0
@@ -96,10 +101,16 @@ apt-get install -y ca-certificates curl gnupg jq auditd
 
 # Stage certificate in system trust store; HTTPS checks fail closed.
 step "Configuring IntelSOC CA and endpoint hostname"
-install -d -m 0755 "$(dirname "$CA_PATH")"
-install -m 0644 "$CA_SOURCE" "$CA_PATH"
-update-ca-certificates >/dev/null
-if ! getent ahostsv4 "$SERVER_HOST" | awk '{print $1}' | grep -Fxq "$SERVER_IP"; then
+TLS_CURL_ARGS=()
+TLS_CA_CONFIG=""
+if (( USE_PRIVATE_CA )); then
+  install -d -m 0755 "$(dirname "$CA_PATH")"
+  install -m 0644 "$CA_SOURCE" "$CA_PATH"
+  update-ca-certificates >/dev/null
+  TLS_CURL_ARGS=(--cacert "$CA_SOURCE")
+  TLS_CA_CONFIG="tls.ca_file        ${CA_PATH}"
+fi
+if [[ -n "$SERVER_IP" ]] && ! getent ahostsv4 "$SERVER_HOST" | awk '{print $1}' | grep -Fxq "$SERVER_IP"; then
   # Modify only our exact host entry, with an existing-file backup above.
   tmp_hosts="$(mktemp)"
   awk -v h="$SERVER_HOST" '{found=0; for(i=2;i<=NF;i++) if($i==h) found=1; if(!found) print}' /etc/hosts > "$tmp_hosts"
@@ -111,7 +122,7 @@ fi
 BASE_URL="https://${SERVER_HOST}:${SERVER_PORT}"
 step "Verifying certificate, hostname, and API health"
 curl --fail --silent --show-error --connect-timeout 8 --max-time 20 \
-  --cacert "$CA_SOURCE" "$BASE_URL/api/v1/health" >/dev/null \
+  "${TLS_CURL_ARGS[@]}" "$BASE_URL/api/v1/health" >/dev/null \
   || die "HTTPS health verification failed. Fluent Bit was not modified."
 
 # Reuse existing device credential if present. Never echo credentials.
@@ -134,7 +145,7 @@ if [[ -z "$DEVICE_ID" ]]; then
   fi
   payload="$(jq -nc --arg h "$(hostname)" '{hostname:$h,platform:"linux"}')"
   response="$(curl --fail --silent --show-error --connect-timeout 8 --max-time 30 \
-      --cacert "$CA_SOURCE" -X POST "$BASE_URL/api/v1/devices/enroll" \
+      "${TLS_CURL_ARGS[@]}" -X POST "$BASE_URL/api/v1/devices/enroll" \
       -H 'Content-Type: application/json' \
       -H "X-IntelSOC-Enrollment-Token: $ENROLLMENT_TOKEN" --data "$payload")" \
       || die "Enrollment failed; installer did not modify Fluent Bit."
@@ -227,7 +238,8 @@ cat > "$CONFIG_FILE" <<EOF
     tls                On
     tls.verify         On
     tls.verify_hostname On
-    tls.ca_file        ${CA_PATH}
+    ${TLS_CA_CONFIG}
+    Header             ngrok-skip-browser-warning 1
     Retry_Limit        False
     Log_Response_Payload Off
 EOF
