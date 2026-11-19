@@ -5,7 +5,7 @@ umask 077
 
 SERVER_HOST="${INTELSOC_SERVER_HOST:-molehill-entomb-riveting.ngrok-free.dev}"
 SERVER_IP="${INTELSOC_SERVER_IP:-}"
-SERVER_PORT="${INTELSOC_SERVER_PORT:-8445}"
+SERVER_PORT="${INTELSOC_SERVER_PORT:-443}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CA_SOURCE="$SCRIPT_DIR/intelsoc-caddy-root.crt"
 CA_PATH="/usr/local/share/ca-certificates/intelsoc/intelsoc-caddy-root.crt"
