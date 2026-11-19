@@ -281,7 +281,7 @@ pipeline:
       header:
         - "X-IntelSOC-Key $($enrollment.ingest_key)"
         - "X-Device-ID $($enrollment.device_id)"
-        - "ngrok-skip-browser-warning: 1"
+        - "ngrok-skip-browser-warning 1"
       retry_limit: false
 "@
 
