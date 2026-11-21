@@ -24,3 +24,18 @@ __pycache__/
 models/checkpoints/
 *.pt
 *.pth
+
+# Local LAnoBERT environment and experiments
+.venv-lanobert/
+ml_dataset/
+lanobert_v02/evaluation/
+intelsoc_synth_eval_v1*
+check_leakage.py
+leakage_report.json
+
+# Local backup files
+*.before-retention.bak
+
+# Model weights
+*.safetensors
+*.bin
