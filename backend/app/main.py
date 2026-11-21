@@ -5,6 +5,7 @@ from app.api.routes import services
 from app.api.routes import events
 from app.api.routes import enrollment
 from app.api.routes import device_management
+from app.api.routes import ai_analysis
 
 app = FastAPI(
     title="IntelSOC API",
@@ -17,3 +18,4 @@ app.include_router(services.router, prefix="/api/v1")
 app.include_router(events.router, prefix="/api/v1")
 app.include_router(enrollment.router, prefix="/api/v1")
 app.include_router(device_management.router, prefix="/api/v1")
+app.include_router(ai_analysis.router, prefix="/api/v1")
