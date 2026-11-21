@@ -46,3 +46,41 @@ def list_ai_analysis(*, model_version: str = "LAnoBERT-v0.2", limit: int = 20) -
         }
         for row in rows
     ]
+
+
+_SUMMARY_SQL = """
+    SELECT COUNT(*)::bigint,
+           COUNT(*) FILTER (WHERE status = 'processed')::bigint,
+           COUNT(*) FILTER (WHERE status = 'failed')::bigint,
+           COUNT(*) FILTER (WHERE status = 'skipped')::bigint,
+           AVG(latency_ms) FILTER (WHERE status = 'processed'),
+           MAX(processed_at) FILTER (WHERE status = 'processed')
+    FROM event_ai_analysis
+    WHERE model_version = %s
+"""
+
+
+def summarize_ai_analysis(*, model_version: str = "LAnoBERT-v0.2") -> dict:
+    """Read one model-specific aggregate without reading event messages or scores.
+
+    Latency reflects successful processed records only; no calibrated
+    thresholds, severity or threat percentages are calculated.
+    """
+    if model_version != "LAnoBERT-v0.2":
+        raise ValueError("unsupported model version")
+
+    with psycopg.connect(**get_postgres_config(), connect_timeout=5) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SET TRANSACTION READ ONLY")
+            cur.execute(_SUMMARY_SQL, (model_version,))
+            row = cur.fetchone()
+
+    return {
+        "model_version": model_version,
+        "total": row[0],
+        "processed": row[1],
+        "failed": row[2],
+        "skipped": row[3],
+        "average_latency_ms": row[4],
+        "last_processed_at": row[5],
+    }
