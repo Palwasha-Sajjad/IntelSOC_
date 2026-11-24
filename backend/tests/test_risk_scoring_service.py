@@ -14,12 +14,18 @@ from app.services.risk_scoring_service import (
 )
 
 
-def ti(provider, verdict, confidence=90, lookup_status="success"):
+def ti(
+    provider, verdict, confidence=90, lookup_status="success",
+    indicator_value="8.8.8.8", provider_data=None,
+):
     return TiEvidence(
         provider=provider,
         verdict=verdict,
         confidence=confidence,
         lookup_status=lookup_status,
+        indicator_type="ip",
+        indicator_value=indicator_value,
+        provider_data=provider_data,
     )
 
 
@@ -217,3 +223,79 @@ def test_override_reason_is_preserved_in_explainable_evidence():
         "override_applied": True,
         "override_reason": "malicious_ti_minimum_suspicious",
     }
+
+
+def test_legacy_weak_malicious_verdict_is_not_strong_evidence():
+    score, _ = score_threat_intelligence(
+        (ti("virustotal", "malicious", confidence=1),)
+    )
+    assert score == 5
+
+
+def test_historical_virustotal_stats_are_reclassified():
+    score, _ = score_threat_intelligence((
+        ti(
+            "virustotal", "malicious", confidence=1,
+            provider_data={
+                "analysis_stats": {
+                    "malicious": 1,
+                    "harmless": 53,
+                    "undetected": 40,
+                }
+            },
+        ),
+        ti("abuseipdb", "benign", confidence=0),
+    ))
+    assert score == 5
+
+
+def test_different_indicators_cannot_corroborate():
+    score, _ = score_threat_intelligence((
+        ti("virustotal", "malicious", indicator_value="8.8.8.8"),
+        ti("abuseipdb", "malicious", indicator_value="1.1.1.1"),
+    ))
+    assert score == 22
+
+
+def test_weak_evidence_cannot_trigger_malicious_override():
+    result = calculate_risk(RiskInputs(
+        alert_id=uuid4(),
+        severity="high",
+        ti_evidence=(ti("virustotal", "malicious", confidence=1),),
+        lanobert_evidence=None,
+    ))
+    assert result.ti_score == 5
+    assert result.overall_score == 55
+    assert result.classification == "suspicious"
+    assert result.score_version == "1.2"
+
+
+@pytest.mark.parametrize("address", ["127.0.0.1", "::1", "192.168.1.10"])
+def test_nonpublic_indicators_do_not_contribute_to_risk(address):
+    score, _ = score_threat_intelligence((
+        ti("virustotal", "malicious", indicator_value=address),
+    ))
+    assert score == 0
+
+
+def test_abuseipdb_zero_confidence_adds_no_risk():
+    score, _ = score_threat_intelligence((
+        ti("abuseipdb", "benign", confidence=0),
+    ))
+    assert score == 0
+
+
+def test_weak_provider_cannot_inflate_strong_malicious_score():
+    score, _ = score_threat_intelligence((
+        ti("virustotal", "malicious", confidence=80),
+        ti("abuseipdb", "suspicious", confidence=1),
+    ))
+    assert score == 22
+
+
+def test_stronger_suspicious_providers_corroborate():
+    score, _ = score_threat_intelligence((
+        ti("virustotal", "suspicious", confidence=15),
+        ti("abuseipdb", "suspicious", confidence=40),
+    ))
+    assert score == 15

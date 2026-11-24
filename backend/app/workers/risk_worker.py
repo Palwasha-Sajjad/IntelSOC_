@@ -7,7 +7,10 @@ import psycopg
 from dotenv import load_dotenv
 
 from app.core.config import get_postgres_config
-from app.services.risk_scoring_service import assess_alert_risk
+from app.services.risk_scoring_service import (
+    SCORE_VERSION,
+    assess_alert_risk,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -99,7 +102,7 @@ def fetch_pending_risk_alerts(
                         WHERE ati.alert_id = a.alert_id
                           AND tr.updated_at > ra.updated_at
                     )
-                    OR ra.score_version <> '1.1'
+                    OR ra.score_version <> %s
                 )
                 AND (
                     rs.alert_id IS NULL
@@ -114,7 +117,7 @@ def fetch_pending_risk_alerts(
                 ORDER BY a.created_at ASC, a.alert_id ASC
                 LIMIT %s
                 """,
-                (retry_delay_seconds, limit),
+                (SCORE_VERSION, retry_delay_seconds, limit),
             )
             rows = cursor.fetchall()
 

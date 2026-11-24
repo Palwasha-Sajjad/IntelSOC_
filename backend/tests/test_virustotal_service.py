@@ -84,7 +84,11 @@ def test_domain_lookup_uses_domains_endpoint():
 @pytest.mark.parametrize(
     ("payload", "verdict", "confidence"),
     [
-        (vt_payload(malicious=2, harmless=2), "malicious", 50),
+        (vt_payload(malicious=2, harmless=2), "suspicious", 50),
+        (vt_payload(malicious=1, harmless=53), "suspicious", 2),
+        (vt_payload(malicious=3, harmless=97), "suspicious", 3),
+        (vt_payload(malicious=3, harmless=27), "malicious", 10),
+        (vt_payload(malicious=10, harmless=90), "malicious", 10),
         (vt_payload(suspicious=1, harmless=3), "suspicious", 25),
         (vt_payload(harmless=4), "benign", 100),
         (vt_payload(undetected=4), "unknown", None),
@@ -218,3 +222,18 @@ def test_authentication_errors_are_identified(status_code):
         "http_status": status_code,
         "error_type": "authentication_error",
     }
+
+
+def test_failed_scans_excluded_from_agreement():
+    payload = vt_payload(malicious=3, harmless=27)
+    stats = payload["data"]["attributes"]["last_analysis_stats"]
+    stats["timeout"] = 50
+    stats["failure"] = 20
+    stats["type-unsupported"] = 10
+
+    result = normalize_virustotal_response(
+        ThreatIndicator("ip", "8.8.8.8"), payload
+    )
+
+    assert result.verdict == "malicious"
+    assert result.confidence == 10

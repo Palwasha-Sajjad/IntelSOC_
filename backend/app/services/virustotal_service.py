@@ -206,11 +206,25 @@ def _normalize_stats(stats: dict[str, Any]) -> dict[str, int]:
     return normalized
 
 
+def _agreement_total(stats: dict[str, int]) -> int:
+    return sum(
+        stats[key]
+        for key in ("malicious", "suspicious", "harmless", "undetected")
+    )
+
+
 def _verdict_from_stats(stats: dict[str, int]) -> str:
-    if stats["malicious"] > 0:
+    total = _agreement_total(stats)
+
+    if total <= 0:
+        return "unknown"
+
+    malicious = stats["malicious"]
+
+    if malicious >= 3 and malicious * 100 >= total * 10:
         return "malicious"
 
-    if stats["suspicious"] > 0:
+    if malicious > 0 or stats["suspicious"] > 0:
         return "suspicious"
 
     if stats["harmless"] > 0:
@@ -223,14 +237,15 @@ def _confidence_from_stats(
     stats: dict[str, int],
     verdict: str,
 ) -> int | None:
-    total = sum(stats.values())
+    total = _agreement_total(stats)
+
     if total <= 0:
         return None
 
     if verdict == "malicious":
         decisive = stats["malicious"]
     elif verdict == "suspicious":
-        decisive = stats["suspicious"]
+        decisive = stats["malicious"] + stats["suspicious"]
     elif verdict == "benign":
         decisive = stats["harmless"]
     else:
