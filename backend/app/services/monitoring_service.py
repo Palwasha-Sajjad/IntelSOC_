@@ -161,3 +161,176 @@ def list_incidents(
             limit, offset,
         ),
     )
+
+
+def get_alert_detail(*, alert_id):
+    rows = _fetch_rows(
+        """
+        SELECT
+            a.*,
+            d.hostname,
+            d.platform,
+            d.criticality
+        FROM public.security_alerts a
+        LEFT JOIN public.registered_devices d
+            ON d.device_id = a.device_id
+        WHERE a.alert_id = %s
+        """,
+        (alert_id,),
+    )
+
+    return rows[0] if rows else None
+
+
+def get_alert_ti(*, alert_id):
+    if get_alert_detail(alert_id=alert_id) is None:
+        return None
+
+    return _fetch_rows(
+        """
+        SELECT
+            t.result_id,
+            t.provider,
+            t.indicator_type,
+            t.indicator_value,
+            t.verdict,
+            t.lookup_status,
+            t.confidence,
+            t.checked_at,
+            t.expires_at,
+            MAX(i.linked_at) AS linked_at,
+            COUNT(DISTINCT i.event_id) AS linked_event_count
+        FROM public.alert_ti_indicators i
+        JOIN public.ti_results t
+            ON t.result_id = i.result_id
+        WHERE i.alert_id = %s
+        GROUP BY
+            t.result_id,
+            t.provider,
+            t.indicator_type,
+            t.indicator_value,
+            t.verdict,
+            t.lookup_status,
+            t.confidence,
+            t.checked_at,
+            t.expires_at
+        ORDER BY linked_at DESC, t.result_id
+        """,
+        (alert_id,),
+    )
+
+
+def get_alert_risk(*, alert_id):
+    if get_alert_detail(alert_id=alert_id) is None:
+        return None
+
+    rows = _fetch_rows(
+        """
+        SELECT
+            alert_id,
+            rule_score,
+            ti_score,
+            lanobert_score,
+            overall_score,
+            classification,
+            assessment_status,
+            evidence,
+            score_version,
+            assessed_at,
+            updated_at
+        FROM public.alert_risk_assessments
+        WHERE alert_id = %s
+        """,
+        (alert_id,),
+    )
+
+    return {
+        "alert_id": alert_id,
+        "assessment": rows[0] if rows else None,
+    }
+
+
+def get_incident_detail(*, incident_id):
+    rows = _fetch_rows(
+        """
+        SELECT
+            i.*,
+            d.hostname,
+            d.platform,
+            d.criticality
+        FROM public.incidents i
+        LEFT JOIN public.registered_devices d
+            ON d.device_id = i.device_id
+        WHERE i.incident_id = %s
+        """,
+        (incident_id,),
+    )
+
+    if not rows:
+        return None
+
+    incident = rows[0]
+
+    alerts = _fetch_rows(
+        """
+        SELECT
+            a.alert_id,
+            a.rule_id,
+            a.title,
+            a.severity,
+            a.status,
+            a.created_at,
+            r.overall_score,
+            r.classification,
+            ia.linked_at
+        FROM public.incident_alerts ia
+        JOIN public.security_alerts a
+            ON a.alert_id = ia.alert_id
+        LEFT JOIN public.alert_risk_assessments r
+            ON r.alert_id = a.alert_id
+        WHERE ia.incident_id = %s
+        ORDER BY ia.linked_at DESC, a.alert_id
+        LIMIT 100
+        """,
+        (incident_id,),
+    )
+
+    history = _fetch_rows(
+        """
+        SELECT
+            history_id,
+            event_type,
+            details,
+            created_at
+        FROM public.incident_history
+        WHERE incident_id = %s
+        ORDER BY created_at DESC, history_id DESC
+        LIMIT 100
+        """,
+        (incident_id,),
+    )
+
+    counts = _fetch_rows(
+        """
+        SELECT
+            (
+                SELECT COUNT(*)
+                FROM public.incident_alerts
+                WHERE incident_id = %s
+            ) AS alert_count,
+            (
+                SELECT COUNT(*)
+                FROM public.incident_history
+                WHERE incident_id = %s
+            ) AS history_count
+        """,
+        (incident_id, incident_id),
+    )[0]
+
+    return {
+        **incident,
+        "alert_count": counts["alert_count"],
+        "history_count": counts["history_count"],
+        "alerts": alerts,
+        "history": history,
+    }

@@ -10,6 +10,10 @@ from app.services.monitoring_service import (
     list_events,
     list_alerts,
     list_incidents,
+    get_alert_detail,
+    get_alert_ti,
+    get_alert_risk,
+    get_incident_detail,
 )
 
 router = APIRouter(
@@ -80,3 +84,48 @@ def get_incidents(
         status=status,
         device_id=device_id,
     )
+
+
+def _require_record(result, detail):
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail=detail,
+        )
+    return result
+
+
+@router.get("/alerts/{alert_id}")
+def read_alert_detail(alert_id: UUID):
+    result = _retrieve(
+        get_alert_detail,
+        alert_id=alert_id,
+    )
+    return _require_record(result, "Alert not found")
+
+
+@router.get("/alerts/{alert_id}/ti")
+def read_alert_ti(alert_id: UUID):
+    result = _retrieve(
+        get_alert_ti,
+        alert_id=alert_id,
+    )
+    return _require_record(result, "Alert not found")
+
+
+@router.get("/alerts/{alert_id}/risk")
+def read_alert_risk(alert_id: UUID):
+    result = _retrieve(
+        get_alert_risk,
+        alert_id=alert_id,
+    )
+    return _require_record(result, "Alert not found")
+
+
+@router.get("/incidents/{incident_id}")
+def read_incident_detail(incident_id: UUID):
+    result = _retrieve(
+        get_incident_detail,
+        incident_id=incident_id,
+    )
+    return _require_record(result, "Incident not found")
