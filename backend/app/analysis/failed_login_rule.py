@@ -23,7 +23,7 @@ class FailedLoginDetectionCandidate:
     rule_name: str
     severity: str
     device_id: str
-    target_user: str
+    target_user: str | None
     source_ip: str | None
     logon_type: int | None
     grouping_basis: str
@@ -38,7 +38,7 @@ class _QualifiedFailure:
     event_id: str
     device_id: str
     event_time: datetime
-    target_user: str
+    target_user: str | None
     source_ip: str | None
     logon_type: int | None
     grouping_basis: str
@@ -148,12 +148,16 @@ def _qualify_events(
         if evidence is None:
             continue
 
-        target_user = str(evidence.target_user or "").strip()
+        target_user = str(evidence.target_user or "").strip() or None
 
-        if not target_user:
-            continue
-
-        if evidence.source_ip is not None:
+        if target_user is None:
+            # Some genuine local interactive failures do not identify a user.
+            # Require explicit loopback evidence; do not infer a username or
+            # accept unidentified remote/network logons into this fallback.
+            if evidence.logon_type != 2 or evidence.source_ip not in {"127.0.0.1", "::1"}:
+                continue
+            grouping_basis = "device_unknown_user_local_interactive"
+        elif evidence.source_ip is not None:
             grouping_basis = "device_user_source_ip"
         else:
             grouping_basis = "device_user_logon_type"
@@ -178,6 +182,14 @@ def _qualify_events(
 def _group_key(
     failure: _QualifiedFailure,
 ) -> tuple[Any, ...]:
+    if failure.target_user is None:
+        return (
+            "unknown_local_interactive",
+            failure.device_id,
+            failure.logon_type,
+            failure.source_ip,
+        )
+
     user_key = failure.target_user.casefold()
 
     if failure.source_ip is not None:

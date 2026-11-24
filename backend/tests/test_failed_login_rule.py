@@ -256,3 +256,61 @@ def test_different_remote_ips_are_not_combined():
     ]
 
     assert evaluate_repeated_failed_logins(events) == []
+
+
+def unknown_local_event(number, seconds, **overrides):
+    options = {"user": "-", "source_ip": "127.0.0.1", "logon_type": 2}
+    options.update(overrides)
+    event = failed_logon_event(number=number, seconds=seconds, **options)
+    event["raw_event"]["StringInserts"][7] = "0xc000006d"
+    event["raw_event"]["StringInserts"][9] = "0xc0000380"
+    return event
+
+
+def test_unknown_local_five_failures_detect_with_nullable_user():
+    events = [unknown_local_event(i, seconds) for i, seconds in enumerate((0, 3, 6, 8, 108))]
+    candidates = evaluate_repeated_failed_logins(events)
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.rule_id == RULE_ID
+    assert candidate.target_user is None
+    assert candidate.source_ip == "127.0.0.1"
+    assert candidate.logon_type == 2
+    assert candidate.grouping_basis == "device_unknown_user_local_interactive"
+    assert candidate.severity == "medium"
+    assert candidate.event_count == 5
+    assert candidate.event_ids == tuple(f"event-{i}" for i in range(5))
+
+
+def test_unknown_local_four_failures_and_duplicate_do_not_detect():
+    events = [unknown_local_event(i, i * 20) for i in range(4)]
+    assert evaluate_repeated_failed_logins(events + [events[-1]]) == []
+
+
+def test_unknown_and_known_users_are_not_combined():
+    events = [unknown_local_event(i, i * 20) for i in range(3)]
+    events += [unknown_local_event(i, i * 20, user="alice") for i in range(3, 5)]
+    assert evaluate_repeated_failed_logins(events) == []
+
+
+def test_unknown_local_failures_on_different_devices_are_not_combined():
+    events = [unknown_local_event(i, i * 20, device_id=f"device-{i // 3}") for i in range(5)]
+    assert evaluate_repeated_failed_logins(events) == []
+
+
+def test_unknown_remote_and_noninteractive_failures_are_excluded():
+    for source_ip, logon_type in [("192.0.2.55", 2), ("127.0.0.1", 3), (None, 2)]:
+        events = [unknown_local_event(i, i * 20, source_ip=source_ip, logon_type=logon_type) for i in range(5)]
+        assert evaluate_repeated_failed_logins(events) == []
+
+
+def test_unknown_ipv6_loopback_failures_detect():
+    events = [unknown_local_event(i, i * 20, source_ip="::1") for i in range(5)]
+    candidate, = evaluate_repeated_failed_logins(events)
+    assert candidate.source_ip == "::1"
+    assert candidate.target_user is None
+
+
+def test_unknown_local_failures_outside_window_do_not_detect():
+    events = [unknown_local_event(i, i * 100) for i in range(5)]
+    assert evaluate_repeated_failed_logins(events) == []
