@@ -283,7 +283,7 @@ def test_registered_api_operations():
         }
     )
 
-    assert operations == 30
+    assert operations == 31
 
 def test_password_not_exposed_in_validation_error(client):
     sensitive_password = "IntelSOC-Sensitive-Test-Only-" * 6
