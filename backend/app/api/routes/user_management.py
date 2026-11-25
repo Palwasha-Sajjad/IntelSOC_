@@ -266,3 +266,94 @@ def resend_user_invitation(
         ValueError,
     ) as exc:
         raise provisioning_error(exc) from None
+
+# --------------------------------------------------
+# Administrator-initiated password reset
+# --------------------------------------------------
+
+from fastapi import Response
+
+from app.services.auth_password_recovery_service import (
+    request_administrator_password_reset,
+)
+
+from app.services.auth_password_reset_token_service import (
+    PasswordResetUserNotFound,
+    PasswordResetNotAllowed,
+)
+
+from app.services.auth_rate_limit_service import (
+    RecoveryRateLimitExceeded,
+)
+
+
+class AdministratorPasswordResetResponse(BaseModel):
+    user_id: UUID
+    reset_expires_at: datetime
+    email_delivery: Literal["submitted", "unconfirmed"]
+    audit_recorded: bool
+
+
+@router.post(
+    "/{user_id}/reset-password",
+    response_model=AdministratorPasswordResetResponse,
+)
+def administrator_password_reset(
+    user_id: UUID,
+    request: Request,
+    response: Response,
+    administrator=Depends(require_administrator),
+):
+
+    response.headers["Cache-Control"] = "no-store"
+
+    try:
+
+        return request_administrator_password_reset(
+            user_id=user_id,
+            actor_user_id=administrator["user_id"],
+            source_ip=(
+                request.client.host
+                if request.client else None
+            ),
+        )
+
+    except RecoveryRateLimitExceeded as exc:
+
+        raise HTTPException(
+            status_code=429,
+            detail="Too many password recovery requests",
+            headers={
+                "Retry-After": str(exc.retry_after),
+                "Cache-Control": "no-store",
+            },
+        ) from None
+
+    except PasswordResetUserNotFound:
+
+        raise HTTPException(
+            status_code=404,
+            detail="User not found",
+            headers={"Cache-Control": "no-store"},
+        ) from None
+
+    except PasswordResetNotAllowed:
+
+        raise HTTPException(
+            status_code=409,
+            detail="Account is not eligible for password recovery",
+            headers={"Cache-Control": "no-store"},
+        ) from None
+
+    except (
+        ProvisioningRateLimitExceeded,
+        RateLimitUnavailable,
+        UserManagementForbidden,
+        EmailConfigurationError,
+        psycopg.Error,
+        OSError,
+        KeyError,
+        ValueError,
+    ) as exc:
+
+        raise provisioning_error(exc) from None

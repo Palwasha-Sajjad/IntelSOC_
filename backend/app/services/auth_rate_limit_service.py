@@ -315,3 +315,197 @@ def enforce_activation_rate_limit(
         raise ActivationRateLimitExceeded(
             retry_after=max(1, int(retry_after))
         )
+
+# --------------------------------------------------
+# Password recovery and reset rate limiting
+# --------------------------------------------------
+
+RECOVERY_WINDOW_SECONDS = 3600
+RECOVERY_EMAIL_LIMIT = 5
+RECOVERY_IP_LIMIT = 20
+RECOVERY_COOLDOWN_SECONDS = 60
+
+RESET_WINDOW_SECONDS = 60
+RESET_TOKEN_LIMIT = 5
+RESET_IP_LIMIT = 20
+
+
+class RecoveryRateLimitExceeded(Exception):
+    """Password recovery request limit exceeded."""
+
+    def __init__(self, retry_after):
+        self.retry_after = retry_after
+        super().__init__("Too many password recovery requests")
+
+
+class ResetRateLimitExceeded(Exception):
+    """Password reset attempt limit exceeded."""
+
+    def __init__(self, retry_after):
+        self.retry_after = retry_after
+        super().__init__("Too many password reset attempts")
+
+
+RECOVERY_RATE_LIMIT_SCRIPT = """
+local email_count = tonumber(
+    redis.call('GET', KEYS[1]) or '0'
+)
+
+local ip_count = tonumber(
+    redis.call('GET', KEYS[2]) or '0'
+)
+
+local retry_after = 0
+
+if email_count >= tonumber(ARGV[2]) then
+    retry_after = math.max(
+        retry_after,
+        redis.call('TTL', KEYS[1]),
+        1
+    )
+end
+
+if ip_count >= tonumber(ARGV[3]) then
+    retry_after = math.max(
+        retry_after,
+        redis.call('TTL', KEYS[2]),
+        1
+    )
+end
+
+if redis.call('EXISTS', KEYS[3]) == 1 then
+    retry_after = math.max(
+        retry_after,
+        redis.call('TTL', KEYS[3]),
+        1
+    )
+end
+
+if retry_after > 0 then
+    return {0, retry_after}
+end
+
+local new_email_count = redis.call('INCR', KEYS[1])
+
+if new_email_count == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+
+local new_ip_count = redis.call('INCR', KEYS[2])
+
+if new_ip_count == 1 then
+    redis.call('EXPIRE', KEYS[2], ARGV[1])
+end
+
+redis.call(
+    'SET',
+    KEYS[3],
+    '1',
+    'EX',
+    ARGV[4]
+)
+
+return {1, 0}
+"""
+
+
+def _normalize_recovery_ip(source_ip):
+    try:
+        address = ipaddress.ip_address(source_ip)
+
+        if isinstance(address, ipaddress.IPv6Address):
+            if address.ipv4_mapped is not None:
+                address = address.ipv4_mapped
+
+        return str(address)
+
+    except (ValueError, TypeError):
+        return "unknown"
+
+
+def enforce_password_recovery_rate_limit(
+    *,
+    email,
+    source_ip,
+):
+    """Limit recovery requests independently of account existence."""
+
+    normalized_email = email.strip().lower()
+    normalized_ip = _normalize_recovery_ip(source_ip)
+
+    prefix = "intelsoc:auth:recovery:"
+
+    email_digest = _digest(normalized_email)
+    ip_digest = _digest(normalized_ip)
+
+    keys = [
+        prefix + "email:" + email_digest,
+        prefix + "ip:" + ip_digest,
+        prefix + "cooldown:" + email_digest,
+    ]
+
+    try:
+        with redis.Redis(**get_redis_config()) as client:
+
+            allowed, retry_after = client.eval(
+                RECOVERY_RATE_LIMIT_SCRIPT,
+                len(keys),
+                *keys,
+                RECOVERY_WINDOW_SECONDS,
+                RECOVERY_EMAIL_LIMIT,
+                RECOVERY_IP_LIMIT,
+                RECOVERY_COOLDOWN_SECONDS,
+            )
+
+    except (redis.RedisError, OSError, ValueError, KeyError):
+        raise RateLimitUnavailable(
+            "Password recovery temporarily unavailable"
+        ) from None
+
+    if not allowed:
+        raise RecoveryRateLimitExceeded(
+            retry_after=max(1, int(retry_after))
+        )
+
+
+def enforce_password_reset_rate_limit(
+    *,
+    reset_token,
+    source_ip,
+):
+    """Limit password reset attempts by token and source IP."""
+
+    normalized_ip = _normalize_recovery_ip(source_ip)
+
+    token_key = (
+        "intelsoc:auth:reset:token:"
+        + _digest(reset_token)
+    )
+
+    ip_key = (
+        "intelsoc:auth:reset:ip:"
+        + _digest(normalized_ip)
+    )
+
+    try:
+        with redis.Redis(**get_redis_config()) as client:
+
+            allowed, retry_after = client.eval(
+                RATE_LIMIT_SCRIPT,
+                2,
+                token_key,
+                ip_key,
+                RESET_WINDOW_SECONDS,
+                RESET_TOKEN_LIMIT,
+                RESET_IP_LIMIT,
+            )
+
+    except (redis.RedisError, OSError, ValueError, KeyError):
+        raise RateLimitUnavailable(
+            "Password reset temporarily unavailable"
+        ) from None
+
+    if not allowed:
+        raise ResetRateLimitExceeded(
+            retry_after=max(1, int(retry_after))
+        )

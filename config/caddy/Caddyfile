@@ -49,7 +49,7 @@ https://localhost:8443 {
 
     @auth_write {
         method POST
-        path /api/v1/auth/login /api/v1/auth/logout /api/v1/auth/activate
+        path /api/v1/auth/login /api/v1/auth/logout /api/v1/auth/activate /api/v1/auth/forgot-password /api/v1/auth/reset-password
     }
 
     handle @auth_write {
@@ -70,7 +70,7 @@ https://localhost:8443 {
 
     @user_management_write {
         method POST
-        path_regexp user_write ^/api/v1/users(/[^/]+/resend-invitation)?$
+        path_regexp user_write ^/api/v1/users(/[^/]+/(resend-invitation|reset-password))?$
     }
 
     handle @user_management_write {

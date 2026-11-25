@@ -131,3 +131,124 @@ def send_invitation_email(
         subject=subject,
         body=body,
     )
+
+# --------------------------------------------------
+# Password recovery email templates
+# --------------------------------------------------
+
+def build_password_reset_email(
+    *,
+    username,
+    reset_token,
+):
+    """Build a secure password recovery email."""
+
+    import re
+
+    if not isinstance(username, str) or not re.fullmatch(
+        r"[A-Za-z0-9_.-]{3,64}",
+        username,
+    ):
+        raise ValueError("Invalid username")
+
+    if not isinstance(reset_token, str) or not re.fullmatch(
+        r"[A-Za-z0-9_-]{43}",
+        reset_token,
+    ):
+        raise ValueError("Invalid password reset token")
+
+    origin = get_dashboard_origin()
+
+    reset_link = (
+        f"{origin}/reset-password#token={reset_token}"
+    )
+
+    subject = "IntelSOC | Password Reset Request"
+
+    body = (
+        f"Hello {username},\n\n"
+        "A password reset has been requested for your "
+        "IntelSOC account.\n\n"
+        "To securely reset your password, use the following link:\n\n"
+        f"{reset_link}\n\n"
+        "This link is valid for 30 minutes and can only "
+        "be used once.\n\n"
+        "If you did not request a password reset, "
+        "you can safely ignore this email. Your existing "
+        "password will remain unchanged.\n\n"
+        "Do not share this link with anyone.\n\n"
+        "Regards,\n"
+        "IntelSOC Security"
+    )
+
+    return subject, body
+
+
+def send_password_reset_email(
+    *,
+    recipient,
+    username,
+    reset_token,
+):
+    """Deliver password reset instructions."""
+
+    subject, body = build_password_reset_email(
+        username=username,
+        reset_token=reset_token,
+    )
+
+    return send_email(
+        recipient=recipient,
+        subject=subject,
+        body=body,
+    )
+
+
+def build_password_change_confirmation_email(
+    *,
+    username,
+):
+    """Notify a user that their password has changed."""
+
+    import re
+
+    if not isinstance(username, str) or not re.fullmatch(
+        r"[A-Za-z0-9_.-]{3,64}",
+        username,
+    ):
+        raise ValueError("Invalid username")
+
+    subject = "IntelSOC | Password Changed Successfully"
+
+    body = (
+        f"Hello {username},\n\n"
+        "Your IntelSOC account password has been "
+        "successfully changed.\n\n"
+        "Your previous login sessions have been revoked "
+        "for security purposes.\n\n"
+        "Please sign in again using your new password.\n\n"
+        "If you did not authorize this change, contact "
+        "your IntelSOC Administrator immediately.\n\n"
+        "Regards,\n"
+        "IntelSOC Security"
+    )
+
+    return subject, body
+
+
+def send_password_change_confirmation_email(
+    *,
+    recipient,
+    username,
+):
+    """Deliver a password change security notification."""
+
+    subject, body = build_password_change_confirmation_email(
+        username=username,
+    )
+
+    return send_email(
+        recipient=recipient,
+        subject=subject,
+        body=body,
+    )
