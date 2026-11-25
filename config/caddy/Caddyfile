@@ -31,7 +31,7 @@ https://localhost:8443 {
 
     @dashboard_read {
         method GET
-        path /api/v1/auth/me /api/v1/dashboard/summary /api/v1/events /api/v1/alerts /api/v1/incidents /api/v1/devices /api/v1/ai/analysis /api/v1/ai/summary /api/v1/services/status
+        path /api/v1/auth/me /api/v1/dashboard/summary /api/v1/events /api/v1/alerts /api/v1/incidents /api/v1/devices /api/v1/ai/analysis /api/v1/ai/summary /api/v1/services/status /api/v1/users
     }
 
     handle @dashboard_read {
@@ -49,10 +49,31 @@ https://localhost:8443 {
 
     @auth_write {
         method POST
-        path /api/v1/auth/login /api/v1/auth/logout
+        path /api/v1/auth/login /api/v1/auth/logout /api/v1/auth/activate
     }
 
     handle @auth_write {
+        request_body {
+            max_size 4KB
+        }
+        reverse_proxy 127.0.0.1:8000
+    }
+
+    @user_management_read {
+        method GET
+        path_regexp user_details ^/api/v1/users/[^/]+$
+    }
+
+    handle @user_management_read {
+        reverse_proxy 127.0.0.1:8000
+    }
+
+    @user_management_write {
+        method POST
+        path_regexp user_write ^/api/v1/users(/[^/]+/resend-invitation)?$
+    }
+
+    handle @user_management_write {
         request_body {
             max_size 4KB
         }

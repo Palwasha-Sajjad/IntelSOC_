@@ -11,6 +11,7 @@ from app.api.routes import device_management
 from app.api.routes import ai_analysis
 from app.api.routes import monitoring
 from app.api.routes import auth
+from app.api.routes import user_management
 
 app = FastAPI(
     title="IntelSOC API",
@@ -26,6 +27,7 @@ app.include_router(device_management.router, prefix="/api/v1")
 app.include_router(ai_analysis.router, prefix="/api/v1")
 app.include_router(monitoring.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1")
+app.include_router(user_management.router, prefix="/api/v1")
 
 @app.exception_handler(RequestValidationError)
 async def secure_validation_error_handler(

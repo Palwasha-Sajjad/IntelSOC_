@@ -112,3 +112,206 @@ def enforce_login_rate_limit(*, email, source_ip):
         raise LoginRateLimitExceeded(
             retry_after=int(retry_after)
         )
+
+# --------------------------------------------------
+# Account provisioning and invitation rate limiting
+# --------------------------------------------------
+
+PROVISIONING_WINDOW_SECONDS = 3600
+PROVISIONING_ADMIN_LIMIT = 20
+INVITATION_ACCOUNT_LIMIT = 5
+INVITATION_COOLDOWN_SECONDS = 60
+
+
+class ProvisioningRateLimitExceeded(Exception):
+    """Account provisioning request limit exceeded."""
+
+    def __init__(self, retry_after):
+        self.retry_after = retry_after
+        super().__init__("Too many provisioning requests")
+
+
+PROVISIONING_RATE_LIMIT_SCRIPT = """
+local retry_after = 0
+
+local admin_count = tonumber(
+    redis.call('GET', KEYS[1]) or '0'
+)
+
+if ARGV[5] == '1'
+    and admin_count >= tonumber(ARGV[2]) then
+    retry_after = math.max(
+        retry_after,
+        redis.call('TTL', KEYS[1]),
+        1
+    )
+end
+
+if #KEYS == 3 then
+    local account_count = tonumber(
+        redis.call('GET', KEYS[2]) or '0'
+    )
+
+    if account_count >= tonumber(ARGV[3]) then
+        retry_after = math.max(
+            retry_after,
+            redis.call('TTL', KEYS[2]),
+            1
+        )
+    end
+
+    if redis.call('EXISTS', KEYS[3]) == 1 then
+        retry_after = math.max(
+            retry_after,
+            redis.call('TTL', KEYS[3]),
+            1
+        )
+    end
+end
+
+if retry_after > 0 then
+    return {0, retry_after}
+end
+
+if ARGV[5] == '1' then
+    local new_admin_count = redis.call('INCR', KEYS[1])
+
+    if new_admin_count == 1 then
+        redis.call('EXPIRE', KEYS[1], ARGV[1])
+    end
+end
+
+if #KEYS == 3 then
+    local new_account_count = redis.call('INCR', KEYS[2])
+
+    if new_account_count == 1 then
+        redis.call('EXPIRE', KEYS[2], ARGV[1])
+    end
+
+    redis.call(
+        'SET',
+        KEYS[3],
+        '1',
+        'EX',
+        ARGV[4]
+    )
+end
+
+return {1, 0}
+"""
+
+
+def enforce_provisioning_rate_limit(
+    *,
+    actor_user_id,
+    user_id=None,
+    charge_admin=True,
+):
+    """Atomically reserve provisioning request capacity."""
+
+    if not charge_admin and user_id is None:
+        raise ValueError("Account reservation requires user ID")
+
+    prefix = "intelsoc:auth:provisioning:"
+
+    keys = [
+        prefix + "admin:" + _digest(str(actor_user_id))
+    ]
+
+    if user_id is not None:
+        account_digest = _digest(str(user_id))
+
+        keys.extend([
+            prefix + "account:" + account_digest,
+            prefix + "cooldown:" + account_digest,
+        ])
+
+    try:
+        with redis.Redis(**get_redis_config()) as client:
+
+            allowed, retry_after = client.eval(
+                PROVISIONING_RATE_LIMIT_SCRIPT,
+                len(keys),
+                *keys,
+                PROVISIONING_WINDOW_SECONDS,
+                PROVISIONING_ADMIN_LIMIT,
+                INVITATION_ACCOUNT_LIMIT,
+                INVITATION_COOLDOWN_SECONDS,
+                int(charge_admin),
+            )
+
+    except (redis.RedisError, OSError, ValueError, KeyError):
+        raise RateLimitUnavailable(
+            "Account provisioning temporarily unavailable"
+        ) from None
+
+    if not allowed:
+        raise ProvisioningRateLimitExceeded(
+            retry_after=max(1, int(retry_after))
+        )
+
+
+
+# --------------------------------------------------
+# Account activation rate limiting
+# --------------------------------------------------
+
+ACTIVATION_WINDOW_SECONDS = 60
+ACTIVATION_TOKEN_LIMIT = 5
+ACTIVATION_IP_LIMIT = 20
+
+
+class ActivationRateLimitExceeded(Exception):
+    """Account activation attempt limit exceeded."""
+
+    def __init__(self, retry_after):
+        self.retry_after = retry_after
+        super().__init__("Too many activation attempts")
+
+
+def enforce_activation_rate_limit(
+    *,
+    invitation_token,
+    source_ip,
+):
+    """Limit activation requests by token and source IP."""
+
+    try:
+        normalized_ip = str(
+            ipaddress.ip_address(source_ip)
+        )
+    except (ValueError, TypeError):
+        normalized_ip = "unknown"
+
+    token_key = (
+        "intelsoc:auth:activation:token:"
+        + _digest(invitation_token)
+    )
+
+    ip_key = (
+        "intelsoc:auth:activation:ip:"
+        + _digest(normalized_ip)
+    )
+
+    try:
+        with redis.Redis(**get_redis_config()) as client:
+
+            allowed, retry_after = client.eval(
+                RATE_LIMIT_SCRIPT,
+                2,
+                token_key,
+                ip_key,
+                ACTIVATION_WINDOW_SECONDS,
+                ACTIVATION_TOKEN_LIMIT,
+                ACTIVATION_IP_LIMIT,
+            )
+
+    except (redis.RedisError, OSError, ValueError, KeyError):
+        raise RateLimitUnavailable(
+            "Account activation temporarily unavailable"
+        ) from None
+
+    if not allowed:
+        raise ActivationRateLimitExceeded(
+            retry_after=max(1, int(retry_after))
+        )

@@ -205,3 +205,128 @@ def logout(
     disable_cache(response)
 
     return {"status": "logged_out"}
+
+
+
+# --------------------------------------------------
+# Invitation-based account activation
+# --------------------------------------------------
+
+from typing import Literal
+
+from app.services.auth_activation_service import (
+    activate_account,
+    InvalidInvitation,
+)
+
+from app.services.auth_rate_limit_service import (
+    enforce_activation_rate_limit,
+    ActivationRateLimitExceeded,
+)
+
+from app.services.auth_session_service import (
+    PASSWORD_VERIFICATION_SLOTS,
+)
+
+
+class ActivateAccountRequest(BaseModel):
+    invitation_token: str = Field(
+        min_length=43,
+        max_length=43,
+        pattern=r"^[A-Za-z0-9_-]{43}$",
+    )
+
+    password: str = Field(
+        min_length=15,
+        max_length=128,
+    )
+
+
+class ActivateAccountResponse(BaseModel):
+    status: Literal["activated"]
+    message: str
+
+
+@router.post(
+    "/activate",
+    response_model=ActivateAccountResponse,
+)
+def activate_invited_account(
+    payload: ActivateAccountRequest,
+    request: Request,
+    response: Response,
+):
+    require_trusted_origin(request)
+
+    source_ip = (
+        request.client.host
+        if request.client else None
+    )
+
+    try:
+        enforce_activation_rate_limit(
+            invitation_token=payload.invitation_token,
+            source_ip=source_ip,
+        )
+
+        if not PASSWORD_VERIFICATION_SLOTS.acquire(
+            blocking=False
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail="Authentication temporarily unavailable",
+                headers={"Cache-Control": "no-store"},
+            )
+
+        try:
+            activate_account(
+                invitation_token=payload.invitation_token,
+                password=payload.password,
+                source_ip=source_ip,
+            )
+
+        finally:
+            PASSWORD_VERIFICATION_SLOTS.release()
+
+    except ActivationRateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many activation attempts",
+            headers={
+                "Retry-After": str(exc.retry_after),
+                "Cache-Control": "no-store",
+            },
+        ) from None
+
+    except InvalidInvitation:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired invitation",
+            headers={"Cache-Control": "no-store"},
+        ) from None
+
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail="Password does not meet security requirements",
+            headers={"Cache-Control": "no-store"},
+        ) from None
+
+    except (
+        RateLimitUnavailable,
+        psycopg.Error,
+        OSError,
+        KeyError,
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="Account activation temporarily unavailable",
+            headers={"Cache-Control": "no-store"},
+        ) from None
+
+    response.headers["Cache-Control"] = "no-store"
+
+    return {
+        "status": "activated",
+        "message": "Account activated successfully. Please log in.",
+    }
