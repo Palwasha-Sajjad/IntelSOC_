@@ -80,6 +80,18 @@ https://localhost:8443 {
         reverse_proxy 127.0.0.1:8000
     }
 
+    @user_lifecycle_write {
+        method PATCH
+        path_regexp user_lifecycle ^/api/v1/users/[^/]+/(status|role)$
+    }
+
+    handle @user_lifecycle_write {
+        request_body {
+            max_size 4KB
+        }
+        reverse_proxy 127.0.0.1:8000
+    }
+
     @device_write {
         method PATCH
         path_regexp device_write ^/api/v1/devices/[^/]+/criticality$
