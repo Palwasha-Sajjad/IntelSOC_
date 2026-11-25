@@ -616,3 +616,82 @@ def complete_password_reset(
             "Please sign in using your new password."
         ),
     }
+
+
+# Authenticated password change (all active roles).
+from app.services.auth_password_change_service import change_password
+from app.services.auth_rate_limit_service import (
+    enforce_password_change_rate_limit,
+    PasswordChangeRateLimitExceeded,
+)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=15, max_length=128)
+
+
+class ChangePasswordResponse(BaseModel):
+    status: Literal["password_changed"]
+    message: str
+
+
+@router.post("/change-password", response_model=ChangePasswordResponse)
+def authenticated_password_change(
+    payload: ChangePasswordRequest,
+    request: Request,
+    response: Response,
+    background_tasks: BackgroundTasks,
+):
+    require_trusted_origin(request)
+    disable_cache(response)
+    token = request.cookies.get(SESSION_COOKIE)
+    source_ip = get_source_ip(request)
+    headers = {"Cache-Control": "no-store"}
+
+    try:
+        session = validate_session(token)
+        if session.get("status") != "active":
+            raise InvalidSession()
+
+        enforce_password_change_rate_limit(
+            user_id=session["user_id"], source_ip=source_ip,
+        )
+        if not PASSWORD_VERIFICATION_SLOTS.acquire(blocking=False):
+            raise AuthenticationBusy()
+        try:
+            result = change_password(
+                user_id=session["user_id"], session_token=token,
+                current_password=payload.current_password,
+                new_password=payload.new_password, source_ip=source_ip,
+            )
+        finally:
+            PASSWORD_VERIFICATION_SLOTS.release()
+
+    except InvalidSession:
+        raise HTTPException(401, "Invalid or expired session", headers=headers) from None
+    except InvalidCredentials:
+        raise HTTPException(400, "Incorrect current password", headers=headers) from None
+    except PasswordChangeRateLimitExceeded as exc:
+        raise HTTPException(
+            429, "Too many password change attempts",
+            headers={**headers, "Retry-After": str(exc.retry_after)},
+        ) from None
+    except ValueError:
+        raise HTTPException(
+            422, "New password must meet requirements and differ from current password",
+            headers=headers,
+        ) from None
+    except (RateLimitUnavailable, AuthenticationBusy, psycopg.Error, OSError, KeyError):
+        raise HTTPException(
+            503, "Password change temporarily unavailable", headers=headers,
+        ) from None
+
+    response.delete_cookie(
+        key=SESSION_COOKIE, path="/", secure=True, httponly=True, samesite="strict",
+    )
+    background_tasks.add_task(_send_reset_confirmation, result["email"], result["username"])
+    return {
+        "status": "password_changed",
+        "message": "Password successfully changed. Please sign in using your new password.",
+    }
