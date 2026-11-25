@@ -49,7 +49,7 @@ https://localhost:8443 {
 
     @auth_write {
         method POST
-        path /api/v1/auth/login /api/v1/auth/logout /api/v1/auth/activate /api/v1/auth/forgot-password /api/v1/auth/reset-password
+        path /api/v1/auth/login /api/v1/auth/logout /api/v1/auth/activate /api/v1/auth/forgot-password /api/v1/auth/reset-password /api/v1/auth/change-password
     }
 
     handle @auth_write {
