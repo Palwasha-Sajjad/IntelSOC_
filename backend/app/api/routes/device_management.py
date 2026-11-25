@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.api.security import verify_admin_key
+from app.api.rbac import require_administrator
 from app.services.device_service import update_device_criticality
 
 
@@ -32,7 +32,7 @@ class DeviceManagementResponse(BaseModel):
 @router.patch(
     "/{device_id}/criticality",
     response_model=DeviceManagementResponse,
-    dependencies=[Depends(verify_admin_key)],
+    dependencies=[Depends(require_administrator)],
 )
 def set_device_criticality(
     device_id: UUID,

@@ -22,3 +22,56 @@ https://{$INTELSOC_GATEWAY_HOST}:8445 {
 		respond "Not Found" 404
 	}
 }
+
+
+# Private IntelSOC dashboard gateway.
+https://localhost:8443 {
+    bind 127.0.0.1
+    tls internal
+
+    @dashboard_read {
+        method GET
+        path /api/v1/auth/me /api/v1/dashboard/summary /api/v1/events /api/v1/alerts /api/v1/incidents /api/v1/devices /api/v1/ai/analysis /api/v1/ai/summary /api/v1/services/status
+    }
+
+    handle @dashboard_read {
+        reverse_proxy 127.0.0.1:8000
+    }
+
+    @investigation_read {
+        method GET
+        path_regexp investigation ^/api/v1/(alerts/[^/]+(/(ti|risk))?|incidents/[^/]+|devices/[^/]+)$
+    }
+
+    handle @investigation_read {
+        reverse_proxy 127.0.0.1:8000
+    }
+
+    @auth_write {
+        method POST
+        path /api/v1/auth/login /api/v1/auth/logout
+    }
+
+    handle @auth_write {
+        request_body {
+            max_size 4KB
+        }
+        reverse_proxy 127.0.0.1:8000
+    }
+
+    @device_write {
+        method PATCH
+        path_regexp device_write ^/api/v1/devices/[^/]+/criticality$
+    }
+
+    handle @device_write {
+        request_body {
+            max_size 4KB
+        }
+        reverse_proxy 127.0.0.1:8000
+    }
+
+    handle {
+        respond "Not Found" 404
+    }
+}

@@ -3,28 +3,46 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.api.routes import monitoring
+from app.api import rbac
+from app.api.routes.auth import SESSION_COOKIE
+from app.services.auth_session_service import InvalidSession
+
+TEST_TOKEN = "a" * 43
+
 
 
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setenv(
         "INTELSOC_ADMIN_API_KEY",
-        "monitoring-test-key"
+        "monitoring-test-key",
     )
 
-    with TestClient(app) as test_client:
+    def validate(token):
+        if token != TEST_TOKEN:
+            raise InvalidSession()
+
+        return {
+            "role": "administrator",
+            "status": "active",
+        }
+
+    monkeypatch.setattr(rbac, "validate_session", validate)
+
+    with TestClient(
+        app,
+        base_url="https://intelsoc.test",
+    ) as test_client:
         yield test_client
 
 
-HEADERS = {
-    "X-IntelSOC-Admin-Key": "monitoring-test-key"
-}
+HEADERS = {"Cookie": f"{SESSION_COOKIE}={TEST_TOKEN}"}
 
 
 @pytest.mark.parametrize("endpoint", [
     "events", "alerts", "incidents"
 ])
-def test_missing_admin_key(client, endpoint):
+def test_missing_session(client, endpoint):
     response = client.get(f"/api/v1/{endpoint}")
     assert response.status_code == 401
 
@@ -32,10 +50,10 @@ def test_missing_admin_key(client, endpoint):
 @pytest.mark.parametrize("endpoint", [
     "events", "alerts", "incidents"
 ])
-def test_invalid_admin_key(client, endpoint):
+def test_legacy_admin_key_rejected(client, endpoint):
     response = client.get(
         f"/api/v1/{endpoint}",
-        headers={"X-IntelSOC-Admin-Key": "invalid"}
+        headers={"X-IntelSOC-Admin-Key": "monitoring-test-key"}
     )
     assert response.status_code == 401
 

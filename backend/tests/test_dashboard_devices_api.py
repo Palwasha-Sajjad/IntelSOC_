@@ -5,13 +5,17 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.api.routes import monitoring
+from app.api import rbac
+from app.api.routes.auth import SESSION_COOKIE
+from app.services.auth_session_service import InvalidSession
+
+TEST_TOKEN = "a" * 43
+
 
 
 DEVICE_ID = UUID("12345678-1234-4234-8234-123456789abc")
 
-HEADERS = {
-    "X-IntelSOC-Admin-Key": "dashboard-test-key"
-}
+HEADERS = {"Cookie": f"{SESSION_COOKIE}={TEST_TOKEN}"}
 
 ENDPOINTS = [
     ("/dashboard/summary", "get_dashboard_summary"),
@@ -24,24 +28,38 @@ ENDPOINTS = [
 def client(monkeypatch):
     monkeypatch.setenv(
         "INTELSOC_ADMIN_API_KEY",
-        "dashboard-test-key"
+        "dashboard-test-key",
     )
 
-    with TestClient(app) as test_client:
+    def validate(token):
+        if token != TEST_TOKEN:
+            raise InvalidSession()
+
+        return {
+            "role": "administrator",
+            "status": "active",
+        }
+
+    monkeypatch.setattr(rbac, "validate_session", validate)
+
+    with TestClient(
+        app,
+        base_url="https://intelsoc.test",
+    ) as test_client:
         yield test_client
 
 
 @pytest.mark.parametrize("endpoint,service", ENDPOINTS)
-def test_missing_key(client, endpoint, service):
+def test_missing_session(client, endpoint, service):
     response = client.get("/api/v1" + endpoint)
     assert response.status_code == 401
 
 
 @pytest.mark.parametrize("endpoint,service", ENDPOINTS)
-def test_invalid_key(client, endpoint, service):
+def test_legacy_admin_key_rejected(client, endpoint, service):
     response = client.get(
         "/api/v1" + endpoint,
-        headers={"X-IntelSOC-Admin-Key": "invalid"}
+        headers={"X-IntelSOC-Admin-Key": "dashboard-test-key"}
     )
     assert response.status_code == 401
 

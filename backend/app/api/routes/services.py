@@ -4,7 +4,8 @@ import psycopg
 import redis
 
 from dotenv import load_dotenv
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from app.api.rbac import require_administrator
 from fastapi.responses import JSONResponse
 from app.core.config import get_postgres_config, get_redis_config
 
@@ -15,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[4]
 load_dotenv(ROOT / ".env")
 
 
-@router.get("/services/status")
+@router.get("/services/status", dependencies=[Depends(require_administrator)])
 def check_services():
     postgresql_status = "disconnected"
     redis_status = "disconnected"

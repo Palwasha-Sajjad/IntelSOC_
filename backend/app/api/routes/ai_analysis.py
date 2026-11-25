@@ -1,4 +1,4 @@
-"""Administrator-protected, read-only AI evidence API."""
+"""Analyst and Administrator protected AI evidence API."""
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
@@ -7,10 +7,10 @@ import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from app.api.security import verify_admin_key
+from app.api.rbac import require_analyst
 from app.services.ai_analysis_service import list_ai_analysis, summarize_ai_analysis
 
-router = APIRouter(prefix="/ai", tags=["ai-analysis"], dependencies=[Depends(verify_admin_key)])
+router = APIRouter(prefix="/ai", tags=["ai-analysis"], dependencies=[Depends(require_analyst)])
 
 
 class AIAnalysisItem(BaseModel):
@@ -47,7 +47,7 @@ class AIAnalysisSummary(BaseModel):
 
 @router.get("/summary", response_model=AIAnalysisSummary)
 def get_ai_summary():
-    """Administrator-only aggregate statistics, not security risk verdicts."""
+    """Authorized aggregate statistics, not security risk verdicts."""
     try:
         return summarize_ai_analysis()
     except (psycopg.Error, OSError, KeyError):
