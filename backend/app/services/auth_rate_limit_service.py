@@ -509,3 +509,37 @@ def enforce_password_reset_rate_limit(
         raise ResetRateLimitExceeded(
             retry_after=max(1, int(retry_after))
         )
+
+
+# Independent authenticated password change attempt quota.
+CHANGE_PASSWORD_WINDOW_SECONDS = 60
+CHANGE_PASSWORD_ACCOUNT_LIMIT = 5
+CHANGE_PASSWORD_IP_LIMIT = 20
+
+
+class PasswordChangeRateLimitExceeded(Exception):
+    def __init__(self, retry_after):
+        self.retry_after = retry_after
+        super().__init__("Too many password change attempts")
+
+
+def enforce_password_change_rate_limit(*, user_id, source_ip):
+    prefix = "intelsoc:auth:change-password:"
+    keys = [
+        prefix + "account:" + _digest(str(user_id)),
+        prefix + "ip:" + _digest(_normalize_recovery_ip(source_ip)),
+    ]
+    try:
+        with redis.Redis(**get_redis_config()) as client:
+            allowed, retry_after = client.eval(
+                RATE_LIMIT_SCRIPT, 2, *keys,
+                CHANGE_PASSWORD_WINDOW_SECONDS,
+                CHANGE_PASSWORD_ACCOUNT_LIMIT,
+                CHANGE_PASSWORD_IP_LIMIT,
+            )
+    except (redis.RedisError, OSError, ValueError, KeyError):
+        raise RateLimitUnavailable(
+            "Password change temporarily unavailable"
+        ) from None
+    if not allowed:
+        raise PasswordChangeRateLimitExceeded(max(1, int(retry_after)))
