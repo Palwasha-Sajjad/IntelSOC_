@@ -104,6 +104,34 @@ https://localhost:8443 {
         reverse_proxy 127.0.0.1:8000
     }
 
+    # Serve only the compiled dashboard on the loopback HTTPS listener.
+    @frontend_assets {
+        method GET HEAD
+        path /assets/*
+    }
+    handle @frontend_assets {
+        root * ./frontend/dist
+        header X-Content-Type-Options nosniff
+        file_server
+    }
+
+    @frontend_pages {
+        method GET HEAD
+        path / /login /activate /forgot-password /reset-password /events /alerts /incidents /ai /devices /users /health /settings
+    }
+    handle @frontend_pages {
+        root * ./frontend/dist
+        header {
+            Cache-Control "no-store"
+            Referrer-Policy "no-referrer"
+            X-Content-Type-Options "nosniff"
+            X-Frame-Options "DENY"
+            Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+        }
+        rewrite * /index.html
+        file_server
+    }
+
     handle {
         respond "Not Found" 404
     }
