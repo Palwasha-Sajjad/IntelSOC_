@@ -14,6 +14,9 @@ from app.services.monitoring_service import (
     get_alert_ti,
     get_alert_risk,
     get_incident_detail,
+    get_dashboard_summary,
+    list_devices,
+    get_device_detail,
 )
 
 router = APIRouter(
@@ -129,3 +132,37 @@ def read_incident_detail(incident_id: UUID):
         incident_id=incident_id,
     )
     return _require_record(result, "Incident not found")
+
+
+@router.get("/dashboard/summary")
+def read_dashboard_summary():
+    return _retrieve(get_dashboard_summary)
+
+
+@router.get("/devices")
+def read_devices(
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=100000),
+    hostname: str | None = Query(default=None, max_length=255),
+    platform: str | None = Query(default=None, max_length=32),
+    status: str | None = Query(default=None, max_length=32),
+    criticality: str | None = Query(default=None, max_length=32),
+):
+    return _retrieve(
+        list_devices,
+        limit=limit,
+        offset=offset,
+        hostname=hostname,
+        platform=platform,
+        status=status,
+        criticality=criticality,
+    )
+
+
+@router.get("/devices/{device_id}")
+def read_device_detail(device_id: UUID):
+    result = _retrieve(
+        get_device_detail,
+        device_id=device_id,
+    )
+    return _require_record(result, "Device not found")

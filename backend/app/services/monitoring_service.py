@@ -334,3 +334,187 @@ def get_incident_detail(*, incident_id):
         "alerts": alerts,
         "history": history,
     }
+
+
+def get_dashboard_summary():
+    rows = _fetch_rows(
+        """
+        SELECT
+            NOW() AS generated_at,
+
+            (
+                SELECT COUNT(*)
+                FROM public.security_events
+            ) AS total_events,
+
+            (
+                SELECT COUNT(*)
+                FROM public.security_events
+                WHERE event_time >= NOW() - INTERVAL '24 hours'
+                  AND event_time <= NOW()
+            ) AS events_last_24h,
+
+            (
+                SELECT COUNT(*)
+                FROM public.security_alerts
+            ) AS total_alerts,
+
+            (
+                SELECT COUNT(*)
+                FROM public.security_alerts
+                WHERE status = 'open'
+            ) AS open_alerts,
+
+            (
+                SELECT COUNT(*)
+                FROM public.incidents
+            ) AS total_incidents,
+
+            (
+                SELECT COUNT(*)
+                FROM public.incidents
+                WHERE status = 'open'
+            ) AS open_incidents,
+
+            (
+                SELECT COUNT(*)
+                FROM public.registered_devices
+            ) AS registered_devices,
+
+            (
+                SELECT COUNT(*)
+                FROM public.registered_devices
+                WHERE status = 'active'
+            ) AS active_registrations,
+
+            (
+                SELECT COUNT(*)
+                FROM public.registered_devices
+                WHERE status = 'pending'
+            ) AS pending_registrations,
+
+            (
+                SELECT COUNT(*)
+                FROM public.registered_devices
+                WHERE status = 'revoked'
+            ) AS revoked_registrations,
+
+            (
+                SELECT COUNT(*)
+                FROM public.security_alerts
+                WHERE severity = 'high'
+            ) AS high_severity_alerts,
+
+            (
+                SELECT COUNT(*)
+                FROM public.alert_risk_assessments
+                WHERE classification = 'normal'
+            ) AS normal_risk,
+
+            (
+                SELECT COUNT(*)
+                FROM public.alert_risk_assessments
+                WHERE classification = 'suspicious'
+            ) AS suspicious_risk,
+
+            (
+                SELECT COUNT(*)
+                FROM public.alert_risk_assessments
+                WHERE classification = 'malicious'
+            ) AS malicious_risk,
+
+            (
+                SELECT COUNT(*)
+                FROM public.security_alerts a
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM public.alert_risk_assessments r
+                    WHERE r.alert_id = a.alert_id
+                )
+            ) AS unassessed_alerts
+        """,
+        (),
+    )
+
+    return rows[0]
+
+
+def list_devices(
+    *,
+    limit=50,
+    offset=0,
+    hostname=None,
+    platform=None,
+    status=None,
+    criticality=None,
+):
+    _validate_pagination(limit, offset)
+
+    return _fetch_rows(
+        """
+        SELECT
+            device_id,
+            hostname,
+            platform,
+            status,
+            criticality,
+            created_at,
+            last_seen_at
+        FROM public.registered_devices
+        WHERE (%s::text IS NULL OR hostname = %s)
+          AND (%s::text IS NULL OR platform = %s)
+          AND (%s::text IS NULL OR status = %s)
+          AND (%s::text IS NULL OR criticality = %s)
+        ORDER BY
+            last_seen_at DESC NULLS LAST,
+            created_at DESC,
+            device_id DESC
+        LIMIT %s OFFSET %s
+        """,
+        (
+            hostname, hostname,
+            platform, platform,
+            status, status,
+            criticality, criticality,
+            limit, offset,
+        ),
+    )
+
+
+def get_device_detail(*, device_id):
+    rows = _fetch_rows(
+        """
+        SELECT
+            d.device_id,
+            d.hostname,
+            d.platform,
+            d.status,
+            d.criticality,
+            d.created_at,
+            d.last_seen_at,
+
+            (
+                SELECT COUNT(*)
+                FROM public.security_events e
+                WHERE e.device_id = d.device_id
+            ) AS event_count,
+
+            (
+                SELECT COUNT(*)
+                FROM public.security_alerts a
+                WHERE a.device_id = d.device_id
+            ) AS alert_count,
+
+            (
+                SELECT COUNT(*)
+                FROM public.incidents i
+                WHERE i.device_id = d.device_id
+            ) AS incident_count
+
+        FROM public.registered_devices d
+        WHERE d.device_id = %s
+        """,
+        (device_id,),
+    )
+
+    return rows[0] if rows else None
