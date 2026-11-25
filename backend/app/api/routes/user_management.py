@@ -357,3 +357,75 @@ def administrator_password_reset(
     ) as exc:
 
         raise provisioning_error(exc) from None
+
+
+# Account lifecycle administration.
+from app.api.routes.auth import SESSION_COOKIE
+from app.services.auth_session_service import InvalidSession
+from app.services.user_lifecycle_service import (
+    change_user_account, LifecycleConflict, LifecycleUserNotFound,
+)
+
+
+class ChangeUserStatusRequest(BaseModel):
+    status: Literal["active", "suspended", "deactivated"]
+
+
+class ChangeUserRoleRequest(BaseModel):
+    role: Literal["viewer", "analyst", "administrator"]
+
+
+class UserLifecycleResponse(BaseModel):
+    user: UserResponse
+    revoked_sessions: int
+    revoked_tokens: int
+
+
+def _apply_lifecycle_change(user_id, request, response, administrator, **change):
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return change_user_account(
+            user_id=user_id,
+            actor_user_id=administrator["user_id"],
+            session_token=request.cookies.get(SESSION_COOKIE),
+            source_ip=request.client.host if request.client else None,
+            **change,
+        )
+    except InvalidSession:
+        status, detail = 401, "Invalid or expired session"
+    except UserManagementForbidden:
+        status, detail = 403, "Administrator authorization required"
+    except LifecycleUserNotFound:
+        status, detail = 404, "User not found"
+    except LifecycleConflict as exc:
+        status, detail = 409, str(exc)
+    except ValueError:
+        status, detail = 422, "Invalid account change"
+    except (psycopg.Error, OSError, KeyError):
+        status, detail = 503, "User management temporarily unavailable"
+    raise HTTPException(
+        status_code=status, detail=detail,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.patch("/{user_id}/status", response_model=UserLifecycleResponse)
+def update_user_status(
+    user_id: UUID, payload: ChangeUserStatusRequest,
+    request: Request, response: Response,
+    administrator=Depends(require_administrator),
+):
+    return _apply_lifecycle_change(
+        user_id, request, response, administrator, status=payload.status,
+    )
+
+
+@router.patch("/{user_id}/role", response_model=UserLifecycleResponse)
+def update_user_role(
+    user_id: UUID, payload: ChangeUserRoleRequest,
+    request: Request, response: Response,
+    administrator=Depends(require_administrator),
+):
+    return _apply_lifecycle_change(
+        user_id, request, response, administrator, role=payload.role,
+    )
