@@ -8,6 +8,9 @@ import type {User} from './types';
 import {AuthForm} from './AuthForm';
 import type {Mode} from './AuthForm';
 import {Overview} from './Overview';
+import {MonitorPage} from './MonitorPage';
+import type {PageKind} from './MonitorPage';
+const integrated = ['/', '/settings', '/events', '/alerts', '/incidents', '/devices'];
 
 const sessionKey=['session'];
 const err=(e:unknown)=>e instanceof Error?e.message:'Request failed';
@@ -36,7 +39,7 @@ function Dashboard({user,onEnd,theme,toggle}:{user:User;onEnd:()=>void;theme:str
   useEffect(()=>{const id=setInterval(()=>setClock(new Date()),1000);return ()=>clearInterval(id);},[]);
   async function logout(){if(busy)return;setBusy(true);setError('');try{await post('/auth/logout',{});onEnd();}catch(e){setError(err(e));}finally{setBusy(false);}}
   const available=nav.filter(n=>n.level<=(user.role==='administrator'?2:user.role==='analyst'?1:0));
-  return <div className="shell"><aside><div className="brand"><Shield size={25}/> IntelSOC</div><p className="nav-label">SECURITY OPERATIONS</p><nav>{available.map(n=><NavLink end={n.path==='/'} key={n.path} to={n.path}><n.icon size={18}/><span>{n.name}</span>{!['/','/settings'].includes(n.path)&&<small className="planned">Soon</small>}</NavLink>)}</nav><p className="sidebar-foot">Private SOC workspace</p></aside><div className="workspace"><header><span className="muted">Security workspace</span><div className="header-actions"><time className="clock">{clock.toLocaleString()}</time><button aria-label="Toggle theme" onClick={toggle}>{theme==='dark'?<Sun size={18}/>:<Moon size={18}/>}</button><span className="identity"><strong>{user.username}</strong><small>{user.role}</small></span><button onClick={()=>void logout()} disabled={busy}><LogOut size={16}/> Sign out</button></div></header><main className="page">{error&&<p role="alert" className="error">{error}</p>}<Routes><Route path="/" element={<Overview user={user}/>}/><Route path="/settings" element={<SettingsPage user={user} onEnd={onEnd}/>}/>{available.filter(n=>!['/','/settings'].includes(n.path)).map(n=><Route key={n.path} path={n.path} element={<section className="panel"><h1>{n.name}</h1><p className="muted">Not integrated yet.</p></section>}/>)}<Route path="*" element={<Navigate to="/" replace/>}/></Routes></main></div></div>;
+  return <div className="shell"><aside><div className="brand"><Shield size={25}/> IntelSOC</div><p className="nav-label">SECURITY OPERATIONS</p><nav>{available.map(n=><NavLink end={n.path==='/'} key={n.path} to={n.path}><n.icon size={18}/><span>{n.name}</span>{!integrated.includes(n.path)&&<small className="planned">Soon</small>}</NavLink>)}</nav><p className="sidebar-foot">Private SOC workspace</p></aside><div className="workspace"><header><span className="muted">Security workspace</span><div className="header-actions"><time className="clock">{clock.toLocaleString()}</time><button aria-label="Toggle theme" onClick={toggle}>{theme==='dark'?<Sun size={18}/>:<Moon size={18}/>}</button><span className="identity"><strong>{user.username}</strong><small>{user.role}</small></span><button onClick={()=>void logout()} disabled={busy}><LogOut size={16}/> Sign out</button></div></header><main className="page">{error&&<p role="alert" className="error">{error}</p>}<Routes><Route path="/" element={<Overview user={user}/>}/><Route path="/settings" element={<SettingsPage user={user} onEnd={onEnd}/>}/>{available.filter(n=>!['/','/settings'].includes(n.path)).map(n=><Route key={n.path} path={n.path} element={integrated.includes(n.path)?<MonitorPage key={n.path} user={user} kind={n.path.slice(1) as PageKind}/>:<section className="panel"><h1>{n.name}</h1><p className="muted">Deferred until after Response Engine development.</p></section>}/>)}<Route path="*" element={<Navigate to="/" replace/>}/></Routes></main></div></div>;
 }
 
 const publicPaths:Record<string,Mode>={'/login':'login','/forgot-password':'forgot','/activate':'activate','/reset-password':'reset'};
@@ -47,7 +50,7 @@ export function App(){
   useEffect(()=>{document.documentElement.dataset.theme=theme;localStorage.setItem('intelsoc-theme',theme);},[theme]);
   const session=useQuery({queryKey:sessionKey,queryFn:({signal})=>api<User>('/auth/me',{signal}),enabled:!publicMode,refetchInterval:30000,staleTime:0});
   useEffect(()=>{if(!publicMode&&session.isError&&unauthorized(session.error)){qc.removeQueries({predicate:q=>q.queryKey[0]!=='session'});navigate('/login',{replace:true});}},[publicMode,session.isError,session.error,qc,navigate]);
-  useEffect(()=>{if(session.data){qc.removeQueries({predicate:q=>['summary','alerts'].includes(String(q.queryKey[0]))&&(q.queryKey[1]!==session.data?.user_id||q.queryKey[2]!==session.data?.role)});}},[session.data,qc]);
+  useEffect(()=>{if(session.data){qc.removeQueries({predicate:q=>['summary','alerts','monitor'].includes(String(q.queryKey[0]))&&(q.queryKey[1]!==session.data?.user_id||q.queryKey[2]!==session.data?.role)});}},[session.data,qc]);
   async function onLogin(){await qc.cancelQueries();qc.clear();await qc.fetchQuery({queryKey:sessionKey,queryFn:({signal})=>api<User>('/auth/me',{signal})});}
   function onEnd(){void qc.cancelQueries();qc.clear();navigate('/login',{replace:true});}
   if(publicMode)return <AuthForm key={publicMode} mode={publicMode} onLogin={onLogin}/>;
